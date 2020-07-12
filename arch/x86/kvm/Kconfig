@@ -36,7 +36,6 @@ config KVM
 	select HAVE_KVM_EVENTFD
 	select KVM_ASYNC_PF
 	select USER_RETURN_NOTIFIER
-	select KVM_MMIO
 	select TASKSTATS
 	select TASK_DELAY_ACCT
 	select PERF_EVENTS

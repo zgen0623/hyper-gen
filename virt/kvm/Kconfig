@@ -18,6 +18,7 @@ config HAVE_KVM_EVENTFD
        select EVENTFD
 
 config KVM_MMIO
+       def_bool n
        bool
 
 config KVM_ASYNC_PF
