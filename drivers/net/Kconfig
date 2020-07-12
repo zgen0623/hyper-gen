@@ -302,6 +302,7 @@ config TUN
 
 config TAP
 	tristate
+	default y
 	---help---
 	  This option is selected by any driver implementing tap user space
 	  interface for a virtual interface to re-use core tap functionality.
