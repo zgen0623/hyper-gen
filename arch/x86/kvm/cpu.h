@@ -1,4 +1,3 @@
-
 #ifndef ARCH_X86_KVM_CPU_H
 #define ARCH_X86_KVM_CPU_H
 

@@ -30,6 +30,7 @@
 #include "pmu.h"
 #include "hyperv.h"
 #include "cpu.h"
+#include "machine.h"
 
 
 #include <linux/clocksource.h>
@@ -8094,6 +8095,8 @@ void kvm_arch_vcpu_postcreate(struct kvm_vcpu *vcpu)
 
 	schedule_delayed_work(&kvm->arch.kvmclock_sync_work,
 					KVMCLOCK_SYNC_PERIOD);
+
+	init_virt_machine(vcpu);
 
 	init_vcpu_cpuid2(vcpu);
 

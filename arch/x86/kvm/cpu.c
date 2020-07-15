@@ -31,6 +31,7 @@
 #include "pmu.h"
 #include "hyperv.h"
 #include "cpu.h"
+#include "machine.h"
 
 
 #include <linux/clocksource.h>
@@ -81,12 +82,6 @@
 #define PML4_START 0x9000
 #define PDPTE_START 0xa000
 #define PDE_START 0xb000
-
-#define CPUS 2
-#define DIES 1
-#define CORES 2
-#define THREADS 1
-
 
 extern unsigned num_emulated_msrs;
 extern unsigned num_msrs_to_save;
@@ -2174,28 +2169,6 @@ static void kvm_get_mce_cap_supported(uint64_t *mcg_cap, int *banks)
 	*mcg_cap = kvm_mce_cap_supported;
 }
 
-static void init_env_possible_cpus(CPUX86State *env, struct kvm *kvm)
-{
-	int i;
-	CPUArchIdList *list;
-
-	env->nr_cores = CORES;
-	env->nr_threads = THREADS;
-
-	list = kvm->possible_cpus;
-	for (i = 0; i < list->len; i++) {
-		if (env->apic_id == list->cpus[i].arch_id) {
-			env->socket_id = list->cpus[i].props.socket_id;
-        	env->core_id =	list->cpus[i].props.core_id;
-        	env->thread_id = list->cpus[i].props.thread_id;
-			break;
-		}
-	}
-}
-
-
-
-
 int init_vcpu_cpuid2(struct kvm_vcpu *vcpu)
 {
 	int r;
@@ -3004,7 +2977,7 @@ static void cpu_x86_update_cr4(CPUX86State *env, uint32_t new_cr4)
 }
 
 //hardcode temporary
-uint64_t kernel_entry = 0x1000000;
+extern uint64_t kernel_entry;
 
 #define LONGMODE_BOOT 1
 
@@ -3893,30 +3866,4 @@ int put_vcpu_env_registers(struct kvm_vcpu *vcpu)
 
 	return ret;
 }
-
-void init_vm_possible_cpus(struct kvm *kvm)
-{
-	int i;
-	CPUArchIdList *list;
-	list = vzalloc(sizeof(CPUArchIdList) +
-                                  sizeof(CPUArchId) * CPUS);
-	list->len = CPUS;	
-    for (i = 0; i < list->len; i++) {
-        X86CPUTopoInfo topo;
-    
-        list->cpus[i].arch_id = x86_apicid_from_cpu_idx(DIES, CORES,
-                                         THREADS, i);
-
-        x86_topo_ids_from_apicid(list->cpus[i].arch_id,
-                                 DIES, CORES,
-                                 THREADS, &topo);
-
-        list->cpus[i].props.socket_id = topo.pkg_id;
-        list->cpus[i].props.core_id = topo.core_id;
-        list->cpus[i].props.thread_id = topo.smt_id;
-    }
-
-	kvm->possible_cpus = list;
-}
-
 
