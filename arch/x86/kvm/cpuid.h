@@ -6,6 +6,12 @@
 #include <asm/cpu.h>
 #include <asm/processor.h>
 
+#define F(x) bit(X86_FEATURE_##x)
+
+/* For scattered features from cpufeatures.h; we currently expose none */
+#define KF(x) bit(KVM_CPUID_BIT_##x)
+
+
 int kvm_update_cpuid(struct kvm_vcpu *vcpu);
 bool kvm_mpx_supported(void);
 struct kvm_cpuid_entry2 *kvm_find_cpuid_entry(struct kvm_vcpu *vcpu,
@@ -164,5 +170,17 @@ static inline bool cpuid_fault_enabled(struct kvm_vcpu *vcpu)
 	return vcpu->arch.msr_misc_features_enables &
 		  MSR_MISC_FEATURES_ENABLES_CPUID_FAULT;
 }
+
+struct kvm_cpuid_param {
+	u32 func;
+	u32 idx;
+	bool has_leaf_count;
+	bool (*qualifier)(const struct kvm_cpuid_param *param);
+};
+
+bool is_centaur_cpu(const struct kvm_cpuid_param *param);
+
+int do_cpuid_ent(struct kvm_cpuid_entry2 *entry, u32 func,
+			u32 idx, int *nent, int maxnent, unsigned int type);
 
 #endif

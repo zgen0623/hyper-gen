@@ -65,11 +65,6 @@ u64 kvm_supported_xcr0(void)
 	return xcr0;
 }
 
-#define F(x) bit(X86_FEATURE_##x)
-
-/* For scattered features from cpufeatures.h; we currently expose none */
-#define KF(x) bit(KVM_CPUID_BIT_##x)
-
 int kvm_update_cpuid(struct kvm_vcpu *vcpu)
 {
 	struct kvm_cpuid_entry2 *best;
@@ -710,7 +705,7 @@ out:
 	return r;
 }
 
-static int do_cpuid_ent(struct kvm_cpuid_entry2 *entry, u32 func,
+int do_cpuid_ent(struct kvm_cpuid_entry2 *entry, u32 func,
 			u32 idx, int *nent, int maxnent, unsigned int type)
 {
 	if (*nent >= maxnent)
@@ -724,14 +719,7 @@ static int do_cpuid_ent(struct kvm_cpuid_entry2 *entry, u32 func,
 
 #undef F
 
-struct kvm_cpuid_param {
-	u32 func;
-	u32 idx;
-	bool has_leaf_count;
-	bool (*qualifier)(const struct kvm_cpuid_param *param);
-};
-
-static bool is_centaur_cpu(const struct kvm_cpuid_param *param)
+bool is_centaur_cpu(const struct kvm_cpuid_param *param)
 {
 	return boot_cpu_data.x86_vendor == X86_VENDOR_CENTAUR;
 }

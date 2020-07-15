@@ -9,6 +9,8 @@
 #include "kvm_cache_regs.h"
 
 #define MSR_IA32_CR_PAT_DEFAULT  0x0007040600070406ULL
+#define MAX_IO_MSRS 256
+#define KVM_MAX_MCE_BANKS 32
 
 static inline void kvm_clear_exception_queue(struct kvm_vcpu *vcpu)
 {
@@ -319,5 +321,29 @@ static inline bool kvm_pat_valid(u64 data)
 
 void kvm_load_guest_xcr0(struct kvm_vcpu *vcpu);
 void kvm_put_guest_xcr0(struct kvm_vcpu *vcpu);
+
+int kvm_vcpu_ioctl_x86_set_xsave(struct kvm_vcpu *vcpu,
+					struct kvm_xsave *guest_xsave);
+
+int kvm_vcpu_ioctl_x86_set_xcrs(struct kvm_vcpu *vcpu,
+				       struct kvm_xcrs *guest_xcrs);
+
+int __msr_io(struct kvm_vcpu *vcpu, struct kvm_msrs *msrs,
+		    struct kvm_msr_entry *entries,
+		    int (*do_msr)(struct kvm_vcpu *vcpu,
+				  unsigned index, u64 *data));
+
+int do_set_msr(struct kvm_vcpu *vcpu, unsigned index, u64 *data);
+
+int kvm_vcpu_ioctl_x86_set_vcpu_events(struct kvm_vcpu *vcpu,
+					      struct kvm_vcpu_events *events);
+
+int kvm_vcpu_ioctl_x86_set_debugregs(struct kvm_vcpu *vcpu,
+					    struct kvm_debugregs *dbgregs);
+
+int kvm_vcpu_ioctl_set_lapic(struct kvm_vcpu *vcpu,
+				    struct kvm_lapic_state *s);
+
+int kvm_set_tsc_khz(struct kvm_vcpu *vcpu, u32 user_tsc_khz);
 
 #endif

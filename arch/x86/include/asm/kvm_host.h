@@ -717,6 +717,8 @@ struct kvm_vcpu_arch {
 
 	/* Flush the L1 Data cache for L1TF mitigation on VMENTER */
 	bool l1tf_flush_l1d;
+
+	void *env;
 };
 
 struct kvm_lpage_info {

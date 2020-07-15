@@ -29,6 +29,8 @@
 #include "cpuid.h"
 #include "pmu.h"
 #include "hyperv.h"
+#include "cpu.h"
+
 
 #include <linux/clocksource.h>
 #include <linux/interrupt.h>
@@ -71,8 +73,6 @@
 #define CREATE_TRACE_POINTS
 #include "trace.h"
 
-#define MAX_IO_MSRS 256
-#define KVM_MAX_MCE_BANKS 32
 u64 __read_mostly kvm_mce_cap_supported = MCG_CTL_P | MCG_SER_P;
 EXPORT_SYMBOL_GPL(kvm_mce_cap_supported);
 
@@ -1017,7 +1017,7 @@ EXPORT_SYMBOL_GPL(kvm_rdpmc);
  * may depend on host virtualization features rather than host cpu features.
  */
 
-static u32 msrs_to_save[] = {
+u32 msrs_to_save[] = {
 	MSR_IA32_SYSENTER_CS, MSR_IA32_SYSENTER_ESP, MSR_IA32_SYSENTER_EIP,
 	MSR_STAR,
 #ifdef CONFIG_X86_64
@@ -1028,9 +1028,9 @@ static u32 msrs_to_save[] = {
 	MSR_IA32_SPEC_CTRL, MSR_IA32_ARCH_CAPABILITIES
 };
 
-static unsigned num_msrs_to_save;
+unsigned num_msrs_to_save;
 
-static u32 emulated_msrs[] = {
+u32 emulated_msrs[] = {
 	MSR_KVM_SYSTEM_TIME, MSR_KVM_WALL_CLOCK,
 	MSR_KVM_SYSTEM_TIME_NEW, MSR_KVM_WALL_CLOCK_NEW,
 	HV_X64_MSR_GUEST_OS_ID, HV_X64_MSR_HYPERCALL,
@@ -1058,19 +1058,19 @@ static u32 emulated_msrs[] = {
 	MSR_AMD64_VIRT_SPEC_CTRL,
 };
 
-static unsigned num_emulated_msrs;
+unsigned num_emulated_msrs;
 
 /*
  * List of msr numbers which are used to expose MSR-based features that
  * can be used by a hypervisor to validate requested CPU features.
  */
-static u32 msr_based_features[] = {
+u32 msr_based_features[] = {
 	MSR_F10H_DECFG,
 	MSR_IA32_UCODE_REV,
 	MSR_IA32_ARCH_CAPABILITIES,
 };
 
-static unsigned int num_msr_based_features;
+unsigned int num_msr_based_features;
 
 u64 kvm_get_arch_capabilities(void)
 {
@@ -1150,7 +1150,7 @@ static int kvm_get_msr_feature(struct kvm_msr_entry *msr)
 	return 0;
 }
 
-static int do_get_msr_feature(struct kvm_vcpu *vcpu, unsigned index, u64 *data)
+int do_get_msr_feature(struct kvm_vcpu *vcpu, unsigned index, u64 *data)
 {
 	struct kvm_msr_entry msr;
 	int r;
@@ -1274,7 +1274,7 @@ static int do_get_msr(struct kvm_vcpu *vcpu, unsigned index, u64 *data)
 	return 0;
 }
 
-static int do_set_msr(struct kvm_vcpu *vcpu, unsigned index, u64 *data)
+int do_set_msr(struct kvm_vcpu *vcpu, unsigned index, u64 *data)
 {
 	struct msr_data msr;
 
@@ -1469,7 +1469,7 @@ static int set_tsc_khz(struct kvm_vcpu *vcpu, u32 user_tsc_khz, bool scale)
 	return 0;
 }
 
-static int kvm_set_tsc_khz(struct kvm_vcpu *vcpu, u32 user_tsc_khz)
+int kvm_set_tsc_khz(struct kvm_vcpu *vcpu, u32 user_tsc_khz)
 {
 	u32 thresh_lo, thresh_hi;
 	int use_scaling = 0;
@@ -2774,7 +2774,7 @@ EXPORT_SYMBOL_GPL(kvm_get_msr_common);
  *
  * @return number of msrs set successfully.
  */
-static int __msr_io(struct kvm_vcpu *vcpu, struct kvm_msrs *msrs,
+int __msr_io(struct kvm_vcpu *vcpu, struct kvm_msrs *msrs,
 		    struct kvm_msr_entry *entries,
 		    int (*do_msr)(struct kvm_vcpu *vcpu,
 				  unsigned index, u64 *data))
@@ -3152,7 +3152,7 @@ static int kvm_vcpu_ioctl_get_lapic(struct kvm_vcpu *vcpu,
 	return kvm_apic_get_state(vcpu, s);
 }
 
-static int kvm_vcpu_ioctl_set_lapic(struct kvm_vcpu *vcpu,
+int kvm_vcpu_ioctl_set_lapic(struct kvm_vcpu *vcpu,
 				    struct kvm_lapic_state *s)
 {
 	int r;
@@ -3235,7 +3235,7 @@ static int vcpu_ioctl_tpr_access_reporting(struct kvm_vcpu *vcpu,
 	return 0;
 }
 
-static int kvm_vcpu_ioctl_x86_setup_mce(struct kvm_vcpu *vcpu,
+int kvm_vcpu_ioctl_x86_setup_mce(struct kvm_vcpu *vcpu,
 					u64 mcg_cap)
 {
 	int r;
@@ -3354,7 +3354,7 @@ static void kvm_vcpu_ioctl_x86_get_vcpu_events(struct kvm_vcpu *vcpu,
 
 static void kvm_set_hflags(struct kvm_vcpu *vcpu, unsigned emul_flags);
 
-static int kvm_vcpu_ioctl_x86_set_vcpu_events(struct kvm_vcpu *vcpu,
+int kvm_vcpu_ioctl_x86_set_vcpu_events(struct kvm_vcpu *vcpu,
 					      struct kvm_vcpu_events *events)
 {
 	if (events->flags & ~(KVM_VCPUEVENT_VALID_NMI_PENDING
@@ -3439,7 +3439,7 @@ static void kvm_vcpu_ioctl_x86_get_debugregs(struct kvm_vcpu *vcpu,
 	memset(&dbgregs->reserved, 0, sizeof(dbgregs->reserved));
 }
 
-static int kvm_vcpu_ioctl_x86_set_debugregs(struct kvm_vcpu *vcpu,
+int kvm_vcpu_ioctl_x86_set_debugregs(struct kvm_vcpu *vcpu,
 					    struct kvm_debugregs *dbgregs)
 {
 	if (dbgregs->flags)
@@ -3563,7 +3563,7 @@ static void kvm_vcpu_ioctl_x86_get_xsave(struct kvm_vcpu *vcpu,
 
 #define XSAVE_MXCSR_OFFSET 24
 
-static int kvm_vcpu_ioctl_x86_set_xsave(struct kvm_vcpu *vcpu,
+int kvm_vcpu_ioctl_x86_set_xsave(struct kvm_vcpu *vcpu,
 					struct kvm_xsave *guest_xsave)
 {
 	u64 xstate_bv =
@@ -3604,7 +3604,7 @@ static void kvm_vcpu_ioctl_x86_get_xcrs(struct kvm_vcpu *vcpu,
 	guest_xcrs->xcrs[0].value = vcpu->arch.xcr0;
 }
 
-static int kvm_vcpu_ioctl_x86_set_xcrs(struct kvm_vcpu *vcpu,
+int kvm_vcpu_ioctl_x86_set_xcrs(struct kvm_vcpu *vcpu,
 				       struct kvm_xcrs *guest_xcrs)
 {
 	int i, r = 0;
@@ -8094,6 +8094,12 @@ void kvm_arch_vcpu_postcreate(struct kvm_vcpu *vcpu)
 
 	schedule_delayed_work(&kvm->arch.kvmclock_sync_work,
 					KVMCLOCK_SYNC_PERIOD);
+
+	init_vcpu_cpuid2(vcpu);
+
+	reset_vcpu_env_regs(vcpu);
+
+	put_vcpu_env_registers(vcpu);
 }
 
 void kvm_arch_vcpu_destroy(struct kvm_vcpu *vcpu)
@@ -8469,7 +8475,60 @@ int kvm_arch_init_vm(struct kvm *kvm, unsigned long type)
 
 int kvm_arch_post_init_vm(struct kvm *kvm)
 {
-	return kvm_mmu_post_init_vm(kvm);
+	int r;
+
+	kvm_vm_ioctl_set_identity_map_addr(kvm, 0xfeffc000);
+
+	r = kvm_vm_ioctl_set_tss_addr(kvm, 0xfeffc000 + 0x1000);
+	if (r != 0)
+		return r;
+
+	r = kvm_mmu_post_init_vm(kvm);
+	if (r != 0)
+		return r;
+
+	mutex_lock(&kvm->lock);
+
+	r = -EEXIST;
+	if (irqchip_in_kernel(kvm))
+		goto create_irqchip_unlock;
+
+	r = -EINVAL;
+	if (kvm->created_vcpus)
+		goto create_irqchip_unlock;
+
+	r = kvm_pic_init(kvm);
+	if (r)
+		goto create_irqchip_unlock;
+
+	r = kvm_ioapic_init(kvm);
+	if (r) {
+		kvm_pic_destroy(kvm);
+		goto create_irqchip_unlock;
+	}
+
+	r = kvm_setup_default_irq_routing(kvm);
+	if (r) {
+		kvm_ioapic_destroy(kvm);
+		kvm_pic_destroy(kvm);
+		goto create_irqchip_unlock;
+	}
+
+	smp_wmb();
+	kvm->arch.irqchip_mode = KVM_IRQCHIP_KERNEL;
+
+	r = kvm_get_supported_msrs();
+    if (r) {
+		goto create_irqchip_unlock;
+    }
+
+    kvm_get_supported_feature_msrs();
+
+	init_vm_possible_cpus(kvm);	
+
+create_irqchip_unlock:
+	mutex_unlock(&kvm->lock);
+	return r;
 }
 
 static void kvm_unload_vcpu_mmu(struct kvm_vcpu *vcpu)

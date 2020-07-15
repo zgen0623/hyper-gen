@@ -413,6 +413,24 @@ struct kvm_memslots {
 	int used_slots;
 };
 
+struct CpuInstanceProperties {
+    int64_t node_id;
+    int64_t socket_id;
+    int64_t die_id;
+    int64_t core_id;
+    int64_t thread_id;
+};
+
+typedef struct CPUArchId {
+    uint64_t arch_id;
+    struct CpuInstanceProperties props;
+} CPUArchId;
+
+typedef struct {
+    int len;
+    CPUArchId cpus[0];
+} CPUArchIdList;
+
 struct kvm {
 	spinlock_t mmu_lock;
 	struct mutex slots_lock;
@@ -473,6 +491,8 @@ struct kvm {
 	struct srcu_struct srcu;
 	struct srcu_struct irq_srcu;
 	pid_t userspace_pid;
+
+	CPUArchIdList *possible_cpus;
 };
 
 #define kvm_err(fmt, ...) \
