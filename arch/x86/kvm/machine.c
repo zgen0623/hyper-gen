@@ -533,3 +533,60 @@ void init_virt_machine(struct kvm_vcpu *vcpu)
 	
 	build_bootparams_mini(vcpu);
 }
+
+int create_virt_machine(struct kvm *kvm)
+{
+	int r;
+
+	kvm_vm_ioctl_set_identity_map_addr(kvm, 0xfeffc000);
+
+	r = kvm_vm_ioctl_set_tss_addr(kvm, 0xfeffc000 + 0x1000);
+	if (r != 0)
+		return r;
+
+	mutex_lock(&kvm->lock);
+
+	r = -EEXIST;
+	if (irqchip_in_kernel(kvm))
+		goto create_irqchip_unlock;
+
+	r = -EINVAL;
+	if (kvm->created_vcpus)
+		goto create_irqchip_unlock;
+
+	r = kvm_pic_init(kvm);
+	if (r)
+		goto create_irqchip_unlock;
+
+	r = kvm_ioapic_init(kvm);
+	if (r) {
+		kvm_pic_destroy(kvm);
+		goto create_irqchip_unlock;
+	}
+
+	r = kvm_setup_default_irq_routing(kvm);
+	if (r) {
+		kvm_ioapic_destroy(kvm);
+		kvm_pic_destroy(kvm);
+		goto create_irqchip_unlock;
+	}
+
+	smp_wmb();
+	kvm->arch.irqchip_mode = KVM_IRQCHIP_KERNEL;
+
+	r = kvm_get_supported_msrs();
+    if (r) {
+		goto create_irqchip_unlock;
+    }
+
+    kvm_get_supported_feature_msrs();
+
+	init_vm_possible_cpus(kvm);	
+
+	if (!kvm->arch.vpit)
+		kvm->arch.vpit = kvm_create_pit(kvm, 0);
+
+create_irqchip_unlock:
+	mutex_unlock(&kvm->lock);
+	return r;
+}

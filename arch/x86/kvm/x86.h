@@ -346,4 +346,8 @@ int kvm_vcpu_ioctl_set_lapic(struct kvm_vcpu *vcpu,
 
 int kvm_set_tsc_khz(struct kvm_vcpu *vcpu, u32 user_tsc_khz);
 
+int kvm_vm_ioctl_set_identity_map_addr(struct kvm *kvm,
+					      u64 ident_addr);
+
+int kvm_vm_ioctl_set_tss_addr(struct kvm *kvm, unsigned long addr);
 #endif

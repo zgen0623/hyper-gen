@@ -2168,7 +2168,7 @@ static void kvm_get_mce_cap_supported(uint64_t *mcg_cap, int *banks)
 	*mcg_cap = kvm_mce_cap_supported;
 }
 
-int init_vcpu_cpuid2(struct kvm_vcpu *vcpu)
+static int init_vcpu_cpuid2(struct kvm_vcpu *vcpu)
 {
 	int r;
 	struct kvm_vcpu_arch *arch = &vcpu->arch;
@@ -2980,7 +2980,7 @@ extern uint64_t kernel_entry;
 
 #define LONGMODE_BOOT 1
 
-void reset_vcpu_env_regs(struct kvm_vcpu *vcpu)
+static void reset_vcpu_env_regs(struct kvm_vcpu *vcpu)
 {
 	int i;
 	uint64_t cr4;
@@ -3806,7 +3806,7 @@ static int put_lapic_state(struct kvm_vcpu *vcpu)
 	return ret;
 }
 
-int put_vcpu_env_registers(struct kvm_vcpu *vcpu)
+static int put_vcpu_env_registers(struct kvm_vcpu *vcpu)
 {
 	int ret = 0;
 	CPUX86State *env = (CPUX86State *)vcpu->arch.env;
@@ -3864,5 +3864,18 @@ int put_vcpu_env_registers(struct kvm_vcpu *vcpu)
 		printk(">>>>fail=%d %s:%d\n", ret, __func__, __LINE__);
 
 	return ret;
+}
+
+int init_vcpu_virt_regs(struct kvm_vcpu *vcpu)
+{
+	int r = 0;
+
+	init_vcpu_cpuid2(vcpu);
+
+	reset_vcpu_env_regs(vcpu);
+
+	put_vcpu_env_registers(vcpu);
+
+	return r;
 }
 

@@ -3958,7 +3958,7 @@ int kvm_arch_vcpu_fault(struct kvm_vcpu *vcpu, struct vm_fault *vmf)
 	return VM_FAULT_SIGBUS;
 }
 
-static int kvm_vm_ioctl_set_tss_addr(struct kvm *kvm, unsigned long addr)
+int kvm_vm_ioctl_set_tss_addr(struct kvm *kvm, unsigned long addr)
 {
 	int ret;
 
@@ -3968,7 +3968,7 @@ static int kvm_vm_ioctl_set_tss_addr(struct kvm *kvm, unsigned long addr)
 	return ret;
 }
 
-static int kvm_vm_ioctl_set_identity_map_addr(struct kvm *kvm,
+int kvm_vm_ioctl_set_identity_map_addr(struct kvm *kvm,
 					      u64 ident_addr)
 {
 	kvm->arch.ept_identity_map_addr = ident_addr;
@@ -8098,11 +8098,7 @@ void kvm_arch_vcpu_postcreate(struct kvm_vcpu *vcpu)
 
 	init_virt_machine(vcpu);
 
-	init_vcpu_cpuid2(vcpu);
-
-	reset_vcpu_env_regs(vcpu);
-
-	put_vcpu_env_registers(vcpu);
+	init_vcpu_virt_regs(vcpu);
 }
 
 void kvm_arch_vcpu_destroy(struct kvm_vcpu *vcpu)
@@ -8478,60 +8474,17 @@ int kvm_arch_init_vm(struct kvm *kvm, unsigned long type)
 
 int kvm_arch_post_init_vm(struct kvm *kvm)
 {
-	int r;
-
-	kvm_vm_ioctl_set_identity_map_addr(kvm, 0xfeffc000);
-
-	r = kvm_vm_ioctl_set_tss_addr(kvm, 0xfeffc000 + 0x1000);
-	if (r != 0)
-		return r;
+	int r = 0;
 
 	r = kvm_mmu_post_init_vm(kvm);
 	if (r != 0)
 		return r;
 
-	mutex_lock(&kvm->lock);
+	create_virt_machine(kvm);
+	if (r != 0)
+		return r;
 
-	r = -EEXIST;
-	if (irqchip_in_kernel(kvm))
-		goto create_irqchip_unlock;
-
-	r = -EINVAL;
-	if (kvm->created_vcpus)
-		goto create_irqchip_unlock;
-
-	r = kvm_pic_init(kvm);
-	if (r)
-		goto create_irqchip_unlock;
-
-	r = kvm_ioapic_init(kvm);
-	if (r) {
-		kvm_pic_destroy(kvm);
-		goto create_irqchip_unlock;
-	}
-
-	r = kvm_setup_default_irq_routing(kvm);
-	if (r) {
-		kvm_ioapic_destroy(kvm);
-		kvm_pic_destroy(kvm);
-		goto create_irqchip_unlock;
-	}
-
-	smp_wmb();
-	kvm->arch.irqchip_mode = KVM_IRQCHIP_KERNEL;
-
-	r = kvm_get_supported_msrs();
-    if (r) {
-		goto create_irqchip_unlock;
-    }
-
-    kvm_get_supported_feature_msrs();
-
-	init_vm_possible_cpus(kvm);	
-
-create_irqchip_unlock:
-	mutex_unlock(&kvm->lock);
-	return r;
+	return 0;
 }
 
 static void kvm_unload_vcpu_mmu(struct kvm_vcpu *vcpu)

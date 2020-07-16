@@ -1524,9 +1524,7 @@ static inline apic_id_t x86_apicid_from_cpu_idx(unsigned nr_dies,
     return apicid_from_topo_ids(nr_dies, nr_cores, nr_threads, &topo);
 }
 
-int init_vcpu_cpuid2(struct kvm_vcpu *vcpu);
-void reset_vcpu_env_regs(struct kvm_vcpu *vcpu);
-int put_vcpu_env_registers(struct kvm_vcpu *vcpu);
+int init_vcpu_virt_regs(struct kvm_vcpu *vcpu);
 
 #define APIC_DEFAULT_ADDRESS 0xfee00000
 #define APIC_SPACE_SIZE      0x100000
