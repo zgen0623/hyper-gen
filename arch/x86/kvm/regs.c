@@ -12,7 +12,7 @@
 #include "mmu.h"
 #include "trace.h"
 #include "pmu.h"
-#include "cpu.h"
+#include "regs.h"
 #include "x86.h"
 #include <asm/cpu.h>
 #include <asm/processor.h>
@@ -30,7 +30,6 @@
 #include "cpuid.h"
 #include "pmu.h"
 #include "hyperv.h"
-#include "cpu.h"
 #include "machine.h"
 
 

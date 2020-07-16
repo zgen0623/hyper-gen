@@ -71,7 +71,7 @@
 #include "cpuid.h"
 #include "pmu.h"
 #include "hyperv.h"
-#include "cpu.h"
+#include "regs.h"
 #include "machine.h"
 
 
