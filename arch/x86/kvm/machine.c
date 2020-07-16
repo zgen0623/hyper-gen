@@ -534,6 +534,61 @@ void init_virt_machine(struct kvm_vcpu *vcpu)
 	build_bootparams_mini(vcpu);
 }
 
+static void kvm_irqchip_add_irq_route(struct kvm_irq_routing *routing, int irq, int irqchip, int pin)
+{
+    struct kvm_irq_routing_entry e = {};
+
+    e.gsi = irq;
+    e.type = KVM_IRQ_ROUTING_IRQCHIP;
+    e.flags = 0;
+    e.u.irqchip.irqchip = irqchip;
+    e.u.irqchip.pin = pin;
+
+	routing->entries[routing->nr] = e;
+	routing->nr++;
+}
+
+static void kvm_pc_setup_irq_routing(struct kvm *kvm)
+{   
+    int i;
+	int r;
+	struct kvm_irq_routing *routing;
+	struct kvm_irq_routing_entry *entries = NULL;
+	int ent_nr = 7 + 8 + 23;
+
+	routing = vmalloc(sizeof(*routing) + ent_nr * sizeof(*entries));
+	if (!entries) {
+		printk(">>>>>fail to irq routing %s:%d\n", __func__, __LINE__);
+		return;
+	}	
+	routing->nr = 0;
+        
+    for (i = 0; i < 8; ++i) {
+        if (i == 2) {
+            continue;
+        }
+        kvm_irqchip_add_irq_route(routing, i, KVM_IRQCHIP_PIC_MASTER, i);
+    }
+
+    for (i = 8; i < 16; ++i) {
+        kvm_irqchip_add_irq_route(routing, i, KVM_IRQCHIP_PIC_SLAVE, i - 8);
+    }
+
+    for (i = 0; i < 24; ++i) {
+        if (i == 0) {
+            kvm_irqchip_add_irq_route(routing, i, KVM_IRQCHIP_IOAPIC, 2);
+        } else if (i != 2) {
+            kvm_irqchip_add_irq_route(routing, i, KVM_IRQCHIP_IOAPIC, i);
+        }
+    }
+
+	r = kvm_set_irq_routing(kvm, routing->entries, routing->nr, 0);
+	if (r) {
+		printk(">>>>>fail to irq routing %s:%d\n", __func__, __LINE__);
+		return;
+	}
+}
+
 int create_virt_machine(struct kvm *kvm)
 {
 	int r;
@@ -585,6 +640,9 @@ int create_virt_machine(struct kvm *kvm)
 
 	if (!kvm->arch.vpit)
 		kvm->arch.vpit = kvm_create_pit(kvm, 0);
+
+//	kvm_pc_setup_irq_routing(kvm);
+	
 
 create_irqchip_unlock:
 	mutex_unlock(&kvm->lock);
