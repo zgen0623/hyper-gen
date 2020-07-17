@@ -127,7 +127,6 @@ bool has_msr_arch_capabs;
 bool has_msr_core_capabs;
 bool has_msr_vmx_vmfunc;
 
-struct kvm_msr_list *kvm_feature_msrs = NULL;
 
 #define CACHE_DESCRIPTOR_UNAVAILABLE 0xFF
 
@@ -1193,7 +1192,7 @@ static bool host_tsx_blacklisted(void)
             model == 60 || model == 69 || model == 70);
 }
 
-uint32_t kvm_arch_get_supported_cpuid(uint32_t function,
+static uint32_t kvm_arch_get_supported_cpuid(uint32_t function,
                                       uint32_t index, int reg) 
 {
     struct kvm_cpuid2 *cpuid;
@@ -1294,22 +1293,23 @@ static uint64_t x86_cpu_get_migratable_flags(FeatureWord w)
     return r;
 }
 
-uint64_t kvm_arch_get_supported_msr_feature(uint32_t index)
+static uint64_t kvm_arch_get_supported_msr_feature(uint32_t index)
 {
     int i;
     uint64_t value;
     uint32_t can_be_one, must_be_one;
 
-    if (kvm_feature_msrs == NULL) { /* Host doesn't support feature MSRs */
+    if (num_msr_based_features == 0) { /* Host doesn't support feature MSRs */
         return 0;
     }
+
     /* Check if requested MSR is supported feature MSR */
-    for (i = 0; i < kvm_feature_msrs->nmsrs; i++)
-        if (kvm_feature_msrs->indices[i] == index) {
+    for (i = 0; i < num_msr_based_features; i++)
+        if (msr_based_features[i] == index) {
             break;
         }
 
-    if (i == kvm_feature_msrs->nmsrs) {
+    if (i == num_msr_based_features) {
         return 0; /* if the feature MSR is not supported, simply return 0 */
     }
 
@@ -2679,35 +2679,14 @@ int kvm_get_supported_msrs(void)
 	return ret;
 }
 
-int kvm_get_supported_feature_msrs(void)
-{
-    int ret = 0;
-
-    if (kvm_feature_msrs != NULL) {
-        return 0;
-    }
-
-	kvm_feature_msrs = vzalloc(sizeof(struct kvm_msr_list)
-		+ (sizeof(u32) * (num_msrs_to_save + num_emulated_msrs)));
-	if (kvm_feature_msrs == NULL)
-		return -1;
-
-	kvm_feature_msrs->nmsrs = num_msr_based_features;
-
-	memcpy(kvm_feature_msrs->indices,
-		&msr_based_features, num_msr_based_features * sizeof(u32));
-
-	return ret;
-}
-
 
 static struct kvm_cpuid2 *get_supported_cpuid(void)
 {
     struct kvm_cpuid2 *cpuid = NULL;
-	static struct kvm_cpuid2 *cpuid_cache;
 	struct kvm_cpuid_entry2 *cpuid_entries;
 	int limit, nent = 0, r, i;
 	u32 func;
+	static struct kvm_cpuid2 *cpuid_cache = NULL;
 	static const struct kvm_cpuid_param param[] = {
 		{ .func = 0, .has_leaf_count = true },
 		{ .func = 0x80000000, .has_leaf_count = true },
@@ -2716,9 +2695,8 @@ static struct kvm_cpuid2 *get_supported_cpuid(void)
 		{ .func = KVM_CPUID_FEATURES },
 	};
 
-    if (cpuid_cache != NULL) {
-        return cpuid_cache;
-    }
+	if (cpuid_cache != NULL)
+		return cpuid_cache;
 
 	cpuid = kzalloc(sizeof(struct kvm_cpuid2)
 		+ (sizeof(struct kvm_cpuid_entry2) * KVM_MAX_CPUID_ENTRIES), GFP_KERNEL);
@@ -2754,7 +2732,7 @@ static struct kvm_cpuid2 *get_supported_cpuid(void)
 	}
 
 	cpuid->nent = nent;
-    cpuid_cache = cpuid;
+	cpuid_cache = cpuid;
 
 	return cpuid;
 
@@ -3647,7 +3625,7 @@ static int put_env_msrs(struct kvm_vcpu *vcpu)
                             env->msr_rtit_addrs[i]);
             }
     }
-    if (kvm_feature_msrs && (env->features[FEAT_1_ECX] & CPUID_EXT_VMX)) {
+    if (num_msr_based_features > 0 && (env->features[FEAT_1_ECX] & CPUID_EXT_VMX)) {
             kvm_msr_entry_add_vmx(env, env->features);
     }
 
@@ -3877,5 +3855,14 @@ int init_vcpu_virt_regs(struct kvm_vcpu *vcpu)
 	put_vcpu_env_registers(vcpu);
 
 	return r;
+}
+
+void destroy_vcpu_regs(struct kvm_vcpu *vcpu)
+{
+	CPUX86State *env = (CPUX86State *)vcpu->arch.env;
+	
+    kfree(env->xsave_buf);
+    kfree(env->kvm_msr_buf);
+	kfree(env);
 }
 

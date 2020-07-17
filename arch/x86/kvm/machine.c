@@ -228,9 +228,11 @@ static void load_linux_mini(struct kvm_vcpu *vcpu)
 		}
 
     	memcpy((void*)ghc.hva, addr, phdr->p_filesz);
-    }   
+    }
 
     kernel_entry = ehdr->e_entry;
+
+	vfree(buf);
 }
 
 #define KERNEL_CMDLINE_ADDR  0x20000
@@ -585,8 +587,11 @@ static void kvm_pc_setup_irq_routing(struct kvm *kvm)
 	r = kvm_set_irq_routing(kvm, routing->entries, routing->nr, 0);
 	if (r) {
 		printk(">>>>>fail to irq routing %s:%d\n", __func__, __LINE__);
-		return;
 	}
+
+	vfree(routing);
+
+	return;
 }
 
 int create_virt_machine(struct kvm *kvm)
@@ -634,8 +639,6 @@ int create_virt_machine(struct kvm *kvm)
 		goto create_irqchip_unlock;
     }
 
-    kvm_get_supported_feature_msrs();
-
 	init_vm_possible_cpus(kvm);	
 
 	if (!kvm->arch.vpit)
@@ -648,3 +651,9 @@ create_irqchip_unlock:
 	mutex_unlock(&kvm->lock);
 	return r;
 }
+
+void destroy_virt_machine(struct kvm *kvm)
+{
+	vfree(kvm->possible_cpus);
+}
+

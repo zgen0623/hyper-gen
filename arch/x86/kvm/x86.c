@@ -8037,14 +8037,14 @@ void kvm_arch_vcpu_free(struct kvm_vcpu *vcpu)
 	void *wbinvd_dirty_mask = vcpu->arch.wbinvd_dirty_mask;
 	struct gfn_to_pfn_cache *cache = &vcpu->arch.st.cache;
 
+	destroy_vcpu_regs(vcpu);
+
 	kvm_release_pfn(cache->pfn, cache->dirty, cache);
 
 	kvmclock_reset(vcpu);
 
 	kvm_x86_ops->vcpu_free(vcpu);
 	free_cpumask_var(wbinvd_dirty_mask);
-
-	kfree(vcpu->arch.env);
 }
 
 struct kvm_vcpu *kvm_arch_vcpu_create(struct kvm *kvm,
@@ -8599,6 +8599,8 @@ void kvm_arch_pre_destroy_vm(struct kvm *kvm)
 
 void kvm_arch_destroy_vm(struct kvm *kvm)
 {
+	destroy_virt_machine(kvm);
+
 	if (current->mm == kvm->mm) {
 		/*
 		 * Free memory regions allocated on behalf of userspace,
@@ -8617,8 +8619,6 @@ void kvm_arch_destroy_vm(struct kvm *kvm)
 	kvfree(rcu_dereference_check(kvm->arch.apic_map, 1));
 	kvm_mmu_uninit_vm(kvm);
 	kvm_page_track_cleanup(kvm);
-
-	vfree(kvm->possible_cpus);
 }
 
 void kvm_arch_free_memslot(struct kvm *kvm, struct kvm_memory_slot *free,

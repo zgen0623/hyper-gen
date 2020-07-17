@@ -1370,17 +1370,11 @@ static inline uint64_t x86_cpu_xsave_components(CPUX86State *env)
            env->features[FEAT_XSAVE_COMP_LO];
 }
 
-uint32_t kvm_arch_get_supported_cpuid(uint32_t function,
-                                      uint32_t index, int reg);
-
-uint64_t kvm_arch_get_supported_msr_feature(uint32_t index);
-
 int kvm_vcpu_ioctl_x86_setup_mce(struct kvm_vcpu *vcpu,	u64 mcg_cap);
 
 void init_vm_possible_cpus(struct kvm *kvm);
 
 int kvm_get_supported_msrs(void);
-int kvm_get_supported_feature_msrs(void);
 
 typedef uint32_t apic_id_t;
 
@@ -1528,6 +1522,8 @@ int init_vcpu_virt_regs(struct kvm_vcpu *vcpu);
 
 #define APIC_DEFAULT_ADDRESS 0xfee00000
 #define APIC_SPACE_SIZE      0x100000
+
+void destroy_vcpu_regs(struct kvm_vcpu *vcpu);
 
 #endif
 
