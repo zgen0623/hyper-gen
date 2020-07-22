@@ -109,7 +109,6 @@
 #include <asm/mce.h>
 #include <linux/kernel_stat.h>
 #include <asm/fpu/internal.h> /* Ugh! */
-#include <asm/pvclock.h>
 #include <asm/div64.h>
 #include <asm/irq_remapping.h>
 
@@ -382,6 +381,8 @@ static void build_mptable_mini(struct kvm_vcpu *vcpu)
 
     base_mp += sizeof(struct mpc_ioapic);
 
+
+
     //build mpc interrupt source
     mpc_intsrc = (struct mpc_intsrc *)base_mp;
 
@@ -392,8 +393,8 @@ static void build_mptable_mini(struct kvm_vcpu *vcpu)
         mpc_intsrc[i].type = MP_INTSRC;
         mpc_intsrc[i].srcbus = 0;
         mpc_intsrc[i].dstapic = ioapic_id;
-
         mpc_intsrc[i].dstirq = pin;
+
         switch (pin) {
         case 0:
             /* Pin 0 is an ExtINT pin. */
@@ -522,11 +523,22 @@ static void build_bootparams_mini(struct kvm_vcpu *vcpu)
     add_e820_entry(boot_params, 0x100000, RAM_SIZE - 0x100000, E820_RAM);
 }
 
+static void create_net_device(struct kvm_vcpu *vcpu)
+{
+
+}
+
+static void create_block_device(struct kvm_vcpu *vcpu)
+{
+
+}
+
 void init_virt_machine(struct kvm_vcpu *vcpu)
 {
 	if (vcpu->vcpu_id != 0)
 		return;
 
+	//the following should be done after memory setup
 	load_linux_mini(vcpu);
 
 	load_cmdline_mini(vcpu);
@@ -534,9 +546,14 @@ void init_virt_machine(struct kvm_vcpu *vcpu)
 	build_mptable_mini(vcpu);
 	
 	build_bootparams_mini(vcpu);
+
+	create_pci(vcpu);
+	create_block_device(vcpu);
+	create_net_device(vcpu);
 }
 
-static void kvm_irqchip_add_irq_route(struct kvm_irq_routing *routing, int irq, int irqchip, int pin)
+static void kvm_irqchip_add_irq_route(struct kvm_irq_routing *routing,
+		int irq, int irqchip, int pin)
 {
     struct kvm_irq_routing_entry e = {};
 

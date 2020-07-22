@@ -591,6 +591,7 @@ int kvm_pic_init(struct kvm *kvm)
 	if (!s)
 		return -ENOMEM;
 	spin_lock_init(&s->lock);
+
 	s->kvm = kvm;
 	s->pics[0].elcr_mask = 0xf8;
 	s->pics[1].elcr_mask = 0xde;
@@ -603,6 +604,7 @@ int kvm_pic_init(struct kvm *kvm)
 	kvm_iodevice_init(&s->dev_master, &picdev_master_ops);
 	kvm_iodevice_init(&s->dev_slave, &picdev_slave_ops);
 	kvm_iodevice_init(&s->dev_eclr, &picdev_eclr_ops);
+
 	mutex_lock(&kvm->slots_lock);
 	ret = kvm_io_bus_register_dev(kvm, KVM_PIO_BUS, 0x20, 2,
 				      &s->dev_master);

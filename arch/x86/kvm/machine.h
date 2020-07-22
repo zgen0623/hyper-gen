@@ -7,5 +7,6 @@ void init_env_possible_cpus(CPUX86State *env, struct kvm *kvm);
 void init_virt_machine(struct kvm_vcpu *vcpu);
 int create_virt_machine(struct kvm *kvm);
 void destroy_virt_machine(struct kvm *kvm);
+void create_pci(struct kvm_vcpu *vcpu);
 
 #endif

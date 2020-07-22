@@ -431,6 +431,12 @@ typedef struct {
     CPUArchId cpus[0];
 } CPUArchIdList;
 
+struct virt_devices {
+	void *vbridge;
+	void *vblock;
+	void *vnet;
+};
+
 struct kvm {
 	spinlock_t mmu_lock;
 	struct mutex slots_lock;
@@ -493,6 +499,8 @@ struct kvm {
 	pid_t userspace_pid;
 
 	CPUArchIdList *possible_cpus;
+
+	struct virt_devices vdevices;
 };
 
 #define kvm_err(fmt, ...) \
