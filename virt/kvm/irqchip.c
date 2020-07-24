@@ -109,6 +109,48 @@ int kvm_set_irq(struct kvm *kvm, int irq_source_id, u32 irq, int level,
 	return ret;
 }
 
+struct kvm *find_kvm_by_id(int kvm_id);
+
+void *vhost_alloc_irq_entry_kvm(uint64_t kvm_id, int virq)
+{
+	struct kvm *kvm = find_kvm_by_id(kvm_id);	
+	struct kvm_kernel_irq_routing_entry *irq_entry =
+		kzalloc(sizeof(struct kvm_kernel_irq_routing_entry), GFP_KERNEL);
+
+	struct kvm_kernel_irq_routing_entry entries[KVM_NR_IRQCHIPS];
+	int n_entries = kvm_irq_map_gsi(kvm, entries, virq);
+
+	
+	printk(">>>>>>%s:%d gsi=%d n=%d\n", __func__, __LINE__, virq, n_entries);
+
+	if (n_entries == 1)
+		*irq_entry = entries[0];
+	else
+		irq_entry->type = 0;
+
+	return irq_entry;
+}
+EXPORT_SYMBOL_GPL(vhost_alloc_irq_entry_kvm);
+
+
+void vhost_inject_virq_kvm(uint64_t kvm_id, void *priv)
+{
+	struct kvm *kvm = find_kvm_by_id(kvm_id);	
+	struct kvm_kernel_irq_routing_entry *irq_entry =
+		(struct kvm_kernel_irq_routing_entry*)priv;
+	
+
+	if (kvm_arch_set_irq_inatomic(irq_entry, kvm,
+					      KVM_USERSPACE_IRQ_SOURCE_ID, 1,
+					      false) == -EWOULDBLOCK) {
+		kvm_set_irq(kvm, KVM_USERSPACE_IRQ_SOURCE_ID, irq_entry->gsi, 1,
+				false);
+		kvm_set_irq(kvm, KVM_USERSPACE_IRQ_SOURCE_ID, irq_entry->gsi, 0,
+				false);
+	}
+}
+EXPORT_SYMBOL_GPL(vhost_inject_virq_kvm);
+
 static void free_irq_routing_table(struct kvm_irq_routing_table *rt)
 {
 	int i;

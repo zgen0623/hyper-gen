@@ -607,10 +607,14 @@ void __weak kvm_arch_pre_destroy_vm(struct kvm *kvm)
 static struct kvm *kvm_create_vm(unsigned long type)
 {
 	int r, i;
+	static uint64_t kvm_id;
 	struct kvm *kvm = kvm_arch_alloc_vm();
 
 	if (!kvm)
 		return ERR_PTR(-ENOMEM);
+
+//	kvm->id = kvm_id++;
+	kvm->id = 0;
 
 	spin_lock_init(&kvm->mmu_lock);
 	mmgrab(current->mm);
@@ -698,6 +702,22 @@ out_err_no_disable:
 	mmdrop(current->mm);
 	return ERR_PTR(r);
 }
+
+struct kvm *find_kvm_by_id(int kvm_id)
+{
+	struct kvm *kvm;
+
+	mutex_lock(&kvm_lock);
+
+	list_for_each_entry(kvm, &vm_list, vm_list) {
+		if (kvm->id == kvm_id)
+			break;
+	}
+
+	mutex_unlock(&kvm_lock);
+	return kvm;
+}
+
 
 static void kvm_destroy_devices(struct kvm *kvm)
 {

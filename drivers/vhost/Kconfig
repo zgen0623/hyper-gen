@@ -35,7 +35,6 @@ config VHOST_VSOCK
 
 config VHOST
 	tristate
-	default y
 	---help---
 	  This option is selected by any driver which needs to access
 	  the core of vhost.

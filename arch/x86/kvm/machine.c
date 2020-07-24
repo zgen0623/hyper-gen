@@ -547,9 +547,11 @@ void init_virt_machine(struct kvm_vcpu *vcpu)
 	
 	build_bootparams_mini(vcpu);
 
+	if (1 == 0) {
 	create_pci(vcpu);
 	create_block_device(vcpu);
 	create_net_device(vcpu);
+	}
 }
 
 static void kvm_irqchip_add_irq_route(struct kvm_irq_routing *routing,

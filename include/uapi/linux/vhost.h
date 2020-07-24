@@ -25,7 +25,8 @@ struct vhost_vring_state {
 struct vhost_vring_file {
 	unsigned int index;
 	int fd; /* Pass -1 to unbind from file. */
-
+	int virq;
+	uint64_t kvm_id;
 };
 
 struct vhost_vring_addr {

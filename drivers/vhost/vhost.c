@@ -34,6 +34,10 @@
 
 #include "vhost.h"
 
+void __must_check vhost_inject_virq_kvm(uint64_t kvm_id, void *irq_priv);
+void * __must_check vhost_alloc_irq_entry_kvm(uint64_t kvm_id, int virq);
+
+
 static ushort max_mem_regions = 64;
 module_param(max_mem_regions, ushort, 0444);
 MODULE_PARM_DESC(max_mem_regions,
@@ -645,6 +649,7 @@ void vhost_dev_cleanup(struct vhost_dev *dev, bool locked)
 			eventfd_ctx_put(dev->vqs[i]->call_ctx);
 		if (dev->vqs[i]->call)
 			fput(dev->vqs[i]->call);
+		kfree(dev->vqs[i]->irq_priv);
 		vhost_vq_reset(dev, dev->vqs[i]);
 	}
 	vhost_dev_free_iovecs(dev);
@@ -1374,6 +1379,7 @@ err:
 	return -EFAULT;
 }
 
+
 long vhost_vring_ioctl(struct vhost_dev *d, int ioctl, void __user *argp)
 {
 	struct file *eventfp, *filep = NULL;
@@ -1518,11 +1524,21 @@ long vhost_vring_ioctl(struct vhost_dev *d, int ioctl, void __user *argp)
 			r = -EFAULT;
 			break;
 		}
+
+		vq->signal_type = f.fd;
+		if (f.fd == 2) {
+			vq->kvm_id = f.kvm_id;
+			vq->irq_priv = vhost_alloc_irq_entry_kvm(f.kvm_id, f.virq);
+		}
+		printk(">>>>>>%s:%d [%d]%d %d %d\n",__func__, __LINE__,idx, f.fd, f.virq, f.kvm_id);
+
+#if 0
 		eventfp = f.fd == -1 ? NULL : eventfd_fget(f.fd);
 		if (IS_ERR(eventfp)) {
 			r = PTR_ERR(eventfp);
 			break;
 		}
+
 		if (eventfp != vq->call) {
 			filep = vq->call;
 			ctx = vq->call_ctx;
@@ -1531,6 +1547,8 @@ long vhost_vring_ioctl(struct vhost_dev *d, int ioctl, void __user *argp)
 				eventfd_ctx_fileget(eventfp) : NULL;
 		} else
 			filep = eventfp;
+#endif
+
 		break;
 	case VHOST_SET_VRING_ERR:
 		if (copy_from_user(&f, argp, sizeof f)) {
@@ -2379,9 +2397,29 @@ static bool vhost_notify(struct vhost_dev *dev, struct vhost_virtqueue *vq)
 /* This actually signals the guest, using eventfd. */
 void vhost_signal(struct vhost_dev *dev, struct vhost_virtqueue *vq)
 {
+	//inject virq to kvm dirctory 
+	switch (vq->signal_type) {
+	case 0:
+		//do nothing
+		break;
+	case 1:
+		//mark masked notifiter pending
+		if (vhost_notify(dev, vq))
+			atomic_set(&vq->signaled, 1);
+		break;
+	case 2:
+		//inject virq to specified kvm
+		if (vhost_notify(dev, vq))
+			vhost_inject_virq_kvm(vq->kvm_id, vq->irq_priv);
+		break;
+	default: break;
+	}
+
 	/* Signal the Guest tell them we used something up. */
+#if 0
 	if (vq->call_ctx && vhost_notify(dev, vq))
 		eventfd_signal(vq->call_ctx, 1);
+#endif
 }
 EXPORT_SYMBOL_GPL(vhost_signal);
 

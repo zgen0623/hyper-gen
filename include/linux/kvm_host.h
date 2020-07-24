@@ -501,6 +501,7 @@ struct kvm {
 	CPUArchIdList *possible_cpus;
 
 	struct virt_devices vdevices;
+	uint64_t id;
 };
 
 #define kvm_err(fmt, ...) \
