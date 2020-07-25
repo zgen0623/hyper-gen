@@ -37,6 +37,11 @@
 void __must_check vhost_inject_virq_kvm(uint64_t kvm_id, void *irq_priv);
 void * __must_check vhost_alloc_irq_entry_kvm(uint64_t kvm_id, int virq);
 
+void __must_check vhost_wait_notify_evt(void *priv);
+void __must_check vhost_free_notify_evt(uint64_t evt_id, uint64_t kvm_id);
+void __must_check vhost_alloc_notify_evt(uint64_t evt_id, uint64_t kvm_id,
+		struct wait_queue_entry *entry);
+
 
 static ushort max_mem_regions = 64;
 module_param(max_mem_regions, ushort, 0444);
@@ -175,8 +180,10 @@ static int vhost_poll_wakeup(wait_queue_entry_t *wait, unsigned mode, int sync,
 {
 	struct vhost_poll *poll = container_of(wait, struct vhost_poll, wait);
 
+#if 0
 	if (!((unsigned long)key & poll->mask))
 		return 0;
+#endif
 
 	vhost_poll_queue(poll);
 	return 0;
@@ -199,6 +206,7 @@ void vhost_poll_init(struct vhost_poll *poll, vhost_work_fn_t fn,
 	poll->mask = mask;
 	poll->dev = dev;
 	poll->wqh = NULL;
+	poll->evt_id = 0;
 
 	vhost_work_init(&poll->work, fn);
 }
@@ -217,6 +225,7 @@ int vhost_poll_start(struct vhost_poll *poll, struct file *file)
 	mask = file->f_op->poll(file, &poll->table);
 	if (mask)
 		vhost_poll_wakeup(&poll->wait, 0, 0, (void *)mask);
+
 	if (mask & POLLERR) {
 		vhost_poll_stop(poll);
 		ret = -EINVAL;
@@ -225,6 +234,12 @@ int vhost_poll_start(struct vhost_poll *poll, struct file *file)
 	return ret;
 }
 EXPORT_SYMBOL_GPL(vhost_poll_start);
+
+
+static void my_vhost_poll_start(struct vhost_poll *poll, struct vhost_virtqueue *vq)
+{
+	vhost_alloc_notify_evt(vq->evt_id, vq->kvm_id, &poll->wait);
+}
 
 /* Stop polling a file. After this function returns, it becomes safe to drop the
  * file reference. You must also flush afterwards. */
@@ -236,6 +251,18 @@ void vhost_poll_stop(struct vhost_poll *poll)
 	}
 }
 EXPORT_SYMBOL_GPL(vhost_poll_stop);
+
+
+static void my_vhost_poll_stop(struct vhost_virtqueue *vq)
+{
+#if 0
+	if (poll->wqh) {
+		remove_wait_queue(poll->wqh, &poll->wait);
+		poll->wqh = NULL;
+	}
+#endif
+	vhost_free_notify_evt(vq->evt_id, vq->kvm_id);
+}
 
 void vhost_work_flush(struct vhost_dev *dev, struct vhost_work *work)
 {
@@ -261,8 +288,15 @@ EXPORT_SYMBOL_GPL(vhost_poll_flush);
 
 void vhost_work_queue(struct vhost_dev *dev, struct vhost_work *work)
 {
+	struct vhost_poll *poll = container_of(work, struct vhost_poll, work);
+
 	if (!dev->worker)
 		return;
+
+#if 0
+	if (poll->evt_id >= 3 && poll->evt_id <= 4)
+		printk(">>>>>%s:%d %lx\n",__func__, __LINE__, poll->evt_id);
+#endif
 
 	if (!test_and_set_bit(VHOST_WORK_QUEUED, &work->flags)) {
 		/* We can only add the work to the list after we're
@@ -271,6 +305,11 @@ void vhost_work_queue(struct vhost_dev *dev, struct vhost_work *work)
 		 */
 		llist_add(&work->node, &dev->work_list);
 		wake_up_process(dev->worker);
+	} else {
+#if 0
+		if (poll->evt_id >= 3 && poll->evt_id <= 4)
+			printk(">>>>>%s:%d %lx\n",__func__, __LINE__, poll->evt_id);
+#endif
 	}
 }
 EXPORT_SYMBOL_GPL(vhost_work_queue);
@@ -307,6 +346,9 @@ static void vhost_vq_meta_reset(struct vhost_dev *d)
 static void vhost_vq_reset(struct vhost_dev *dev,
 			   struct vhost_virtqueue *vq)
 {
+	vq->notify_status = -1;
+	vq->signal_type = -1;
+
 	vq->num = 1;
 	vq->desc = NULL;
 	vq->avail = NULL;
@@ -324,7 +366,7 @@ static void vhost_vq_reset(struct vhost_dev *dev,
 	vq->log_base = NULL;
 	vq->error_ctx = NULL;
 	vq->error = NULL;
-	vq->kick = NULL;
+	//vq->kick = NULL;
 	vq->call_ctx = NULL;
 	vq->call = NULL;
 	vq->log_ctx = NULL;
@@ -584,8 +626,8 @@ void vhost_dev_stop(struct vhost_dev *dev)
 	int i;
 
 	for (i = 0; i < dev->nvqs; ++i) {
-		if (dev->vqs[i]->kick && dev->vqs[i]->handle_kick) {
-			vhost_poll_stop(&dev->vqs[i]->poll);
+		if (dev->vqs[i]->notify_status > 0 && dev->vqs[i]->handle_kick) {
+			my_vhost_poll_stop(dev->vqs[i]);
 			vhost_poll_flush(&dev->vqs[i]->poll);
 		}
 	}
@@ -643,8 +685,8 @@ void vhost_dev_cleanup(struct vhost_dev *dev, bool locked)
 			eventfd_ctx_put(dev->vqs[i]->error_ctx);
 		if (dev->vqs[i]->error)
 			fput(dev->vqs[i]->error);
-		if (dev->vqs[i]->kick)
-			fput(dev->vqs[i]->kick);
+		//if (dev->vqs[i]->kick)
+		//	fput(dev->vqs[i]->kick);
 		if (dev->vqs[i]->call_ctx)
 			eventfd_ctx_put(dev->vqs[i]->call_ctx);
 		if (dev->vqs[i]->call)
@@ -1508,16 +1550,50 @@ long vhost_vring_ioctl(struct vhost_dev *d, int ioctl, void __user *argp)
 			r = -EFAULT;
 			break;
 		}
+
+		if (vq->notify_status != f.fd) {
+			if (f.fd == 0)
+				pollstop = true;
+			else if (f.fd == 1)
+				pollstart = true;
+		} else {
+			if (f.fd == 1) {
+				pollstop = true;
+				pollstart = true;
+			}
+		}
+
+		if (pollstop && vq->handle_kick)
+			my_vhost_poll_stop(vq);
+
+#if 0
+		printk(">>>>>>%s:%d [%d] %d %d evt=%d %p %d\n",__func__, __LINE__,
+			idx, f.fd, vq->notify_status, f.evt_id, vq->handle_kick, pollstart);
+#endif
+
+		vq->notify_status = f.fd;
+		vq->evt_id = f.evt_id;
+		vq->kvm_id = f.kvm_id;
+
+		vq->poll.evt_id = f.evt_id;
+
+		if (pollstart && vq->handle_kick)
+			my_vhost_poll_start(&vq->poll, vq);
+
+#if 0
 		eventfp = f.fd == -1 ? NULL : eventfd_fget(f.fd);
 		if (IS_ERR(eventfp)) {
 			r = PTR_ERR(eventfp);
 			break;
 		}
+
 		if (eventfp != vq->kick) {
 			pollstop = (filep = vq->kick) != NULL;
 			pollstart = (vq->kick = eventfp) != NULL;
 		} else
 			filep = eventfp;
+#endif
+
 		break;
 	case VHOST_SET_VRING_CALL:
 		if (copy_from_user(&f, argp, sizeof f)) {
@@ -1525,12 +1601,30 @@ long vhost_vring_ioctl(struct vhost_dev *d, int ioctl, void __user *argp)
 			break;
 		}
 
+#if 0
 		vq->signal_type = f.fd;
 		if (f.fd == 2) {
+ 			vq->kvm_id = f.kvm_id;
+ 			vq->irq_priv = vhost_alloc_irq_entry_kvm(f.kvm_id, f.virq);
+ 		}
+#endif
+
+#if 1
+		if (vq->signal_type != f.fd) {
+			vq->signal_type = f.fd;
+			if (f.fd == 2) {
+				vq->kvm_id = f.kvm_id;
+				vq->irq_priv = vhost_alloc_irq_entry_kvm(f.kvm_id, f.virq);
+			}
+		} else if (vq->signal_type == 2) {
 			vq->kvm_id = f.kvm_id;
+			kfree(vq->irq_priv);
 			vq->irq_priv = vhost_alloc_irq_entry_kvm(f.kvm_id, f.virq);
 		}
-		printk(">>>>>>%s:%d [%d]%d %d %d\n",__func__, __LINE__,idx, f.fd, f.virq, f.kvm_id);
+
+	//	printk(">>>>>>%s:%d [%d]%d %d %d\n",__func__, __LINE__,idx, f.fd, f.virq, f.kvm_id);
+#endif
+
 
 #if 0
 		eventfp = f.fd == -1 ? NULL : eventfd_fget(f.fd);
@@ -1550,6 +1644,7 @@ long vhost_vring_ioctl(struct vhost_dev *d, int ioctl, void __user *argp)
 #endif
 
 		break;
+#if 0
 	case VHOST_SET_VRING_ERR:
 		if (copy_from_user(&f, argp, sizeof f)) {
 			r = -EFAULT;
@@ -1569,6 +1664,7 @@ long vhost_vring_ioctl(struct vhost_dev *d, int ioctl, void __user *argp)
 		} else
 			filep = eventfp;
 		break;
+#endif
 	case VHOST_SET_VRING_ENDIAN:
 		r = vhost_set_vring_endian(vq, argp);
 		break;
@@ -1592,21 +1688,22 @@ long vhost_vring_ioctl(struct vhost_dev *d, int ioctl, void __user *argp)
 		r = -ENOIOCTLCMD;
 	}
 
-	if (pollstop && vq->handle_kick)
-		vhost_poll_stop(&vq->poll);
 
+
+#if 0
 	if (ctx)
 		eventfd_ctx_put(ctx);
+
 	if (filep)
 		fput(filep);
-
-	if (pollstart && vq->handle_kick)
-		r = vhost_poll_start(&vq->poll, vq->kick);
+#endif
 
 	mutex_unlock(&vq->mutex);
 
 	if (pollstop && vq->handle_kick)
 		vhost_poll_flush(&vq->poll);
+
+
 	return r;
 }
 EXPORT_SYMBOL_GPL(vhost_vring_ioctl);

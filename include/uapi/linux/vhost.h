@@ -27,6 +27,7 @@ struct vhost_vring_file {
 	int fd; /* Pass -1 to unbind from file. */
 	int virq;
 	uint64_t kvm_id;
+	uint64_t evt_id;
 };
 
 struct vhost_vring_addr {

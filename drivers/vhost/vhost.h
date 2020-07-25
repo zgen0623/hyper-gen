@@ -36,6 +36,7 @@ struct vhost_poll {
 	struct vhost_work	  work;
 	unsigned long		  mask;
 	struct vhost_dev	 *dev;
+	uint64_t evt_id;
 };
 
 void vhost_work_init(struct vhost_work *work, vhost_work_fn_t fn);
@@ -95,7 +96,8 @@ struct vhost_virtqueue {
 	struct vring_avail __user *avail;
 	struct vring_used __user *used;
 	const struct vhost_umem_node *meta_iotlb[VHOST_NUM_ADDRS];
-	struct file *kick;
+//	struct file *kick;
+	int notify_status;
 	struct file *error;
 	struct file *call;
 	struct eventfd_ctx *call_ctx;
@@ -105,6 +107,7 @@ struct vhost_virtqueue {
 	atomic_t signaled;
 	void *irq_priv;
 	uint64_t kvm_id;
+	uint64_t evt_id;
 
 	struct vhost_poll poll;
 

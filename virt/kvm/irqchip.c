@@ -109,7 +109,7 @@ int kvm_set_irq(struct kvm *kvm, int irq_source_id, u32 irq, int level,
 	return ret;
 }
 
-struct kvm *find_kvm_by_id(int kvm_id);
+struct kvm *find_kvm_by_id(uint64_t kvm_id);
 
 void *vhost_alloc_irq_entry_kvm(uint64_t kvm_id, int virq)
 {

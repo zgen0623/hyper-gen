@@ -703,7 +703,7 @@ out_err_no_disable:
 	return ERR_PTR(r);
 }
 
-struct kvm *find_kvm_by_id(int kvm_id)
+struct kvm *find_kvm_by_id(uint64_t kvm_id)
 {
 	struct kvm *kvm;
 
@@ -3209,7 +3209,9 @@ static long kvm_vm_ioctl(struct file *filp,
 		r = -EFAULT;
 		if (copy_from_user(&data, argp, sizeof(data)))
 			goto out;
+
 		r = kvm_ioeventfd(kvm, &data);
+
 		break;
 	}
 #ifdef CONFIG_HAVE_KVM_MSI

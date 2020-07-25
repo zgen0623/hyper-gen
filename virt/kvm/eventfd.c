@@ -669,11 +669,13 @@ struct _ioeventfd {
 	struct list_head     list;
 	u64                  addr;
 	int                  length;
-	struct eventfd_ctx  *eventfd;
+//	struct eventfd_ctx  *eventfd;
 	u64                  datamatch;
 	struct kvm_io_device dev;
 	u8                   bus_idx;
 	bool                 wildcard;
+	wait_queue_head_t *wq_head;
+	uint64_t evt_id;
 };
 
 static inline struct _ioeventfd *
@@ -685,7 +687,8 @@ to_ioeventfd(struct kvm_io_device *dev)
 static void
 ioeventfd_release(struct _ioeventfd *p)
 {
-	eventfd_ctx_put(p->eventfd);
+//	eventfd_ctx_put(p->eventfd);
+
 	list_del(&p->list);
 	kfree(p);
 }
@@ -745,9 +748,78 @@ ioeventfd_write(struct kvm_vcpu *vcpu, struct kvm_io_device *this, gpa_t addr,
 	if (!ioeventfd_in_range(p, addr, len, val))
 		return -EOPNOTSUPP;
 
-	eventfd_signal(p->eventfd, 1);
+//	eventfd_signal(p->eventfd, 1);
+#if 0
+	if (p->evt_id >= 3)
+		printk(">>>>>%s:%d\n", __func__, __LINE__);
+#endif
+
+	//wake up vhost thread conditionly
+	if (p->wq_head != NULL) {
+#if 0
+		if (p->evt_id >= 3)
+			printk(">>>>>%s:%d\n", __func__, __LINE__);
+#endif
+
+    	wake_up(p->wq_head);
+	}
+
+
 	return 0;
 }
+
+struct kvm *find_kvm_by_id(uint64_t kvm_id);
+
+void vhost_free_notify_evt(uint64_t evt_id, uint64_t kvm_id)
+{
+	struct kvm *kvm = find_kvm_by_id(kvm_id);
+	struct _ioeventfd *p, *tmp;
+	wait_queue_head_t *head = NULL;
+
+	mutex_lock(&kvm->slots_lock);
+	list_for_each_entry_safe(p, tmp, &kvm->ioeventfds, list) {
+		if (p->evt_id == evt_id) {
+			head = p->wq_head;
+			p->wq_head = NULL;
+//			printk(">>>>>%s:%d evt=%d\n",__func__, __LINE__, evt_id);
+		}
+	}
+	mutex_unlock(&kvm->slots_lock);
+
+	if (head)
+		kfree(head);
+}
+EXPORT_SYMBOL_GPL(vhost_free_notify_evt);
+
+void vhost_alloc_notify_evt(uint64_t evt_id, uint64_t kvm_id,
+			struct wait_queue_entry *entry)
+{
+	struct kvm *kvm = find_kvm_by_id(kvm_id);	
+	struct _ioeventfd *p, *tmp;
+	wait_queue_head_t *head;
+
+	head = kzalloc(sizeof(wait_queue_head_t), GFP_KERNEL);
+	if (!head) {
+		printk(">>>>>error %s:%d\n",__func__, __LINE__);
+		return;
+	}
+
+	init_waitqueue_head(head);
+
+	add_wait_queue(head, entry);
+
+//	printk(">>>>>%s:%d evt=%d\n",__func__, __LINE__, evt_id);
+
+	mutex_lock(&kvm->slots_lock);
+	list_for_each_entry_safe(p, tmp, &kvm->ioeventfds, list) {
+		if (p->evt_id == evt_id) {
+//			printk(">>>>>%s:%d evt=%d\n",__func__, __LINE__, evt_id);
+			p->wq_head = head;
+		}
+	}
+	mutex_unlock(&kvm->slots_lock);
+}
+EXPORT_SYMBOL_GPL(vhost_alloc_notify_evt);
 
 /*
  * This function is called as KVM is completely shutting down.  We do not
@@ -788,8 +860,10 @@ static enum kvm_bus ioeventfd_bus_from_flags(__u32 flags)
 {
 	if (flags & KVM_IOEVENTFD_FLAG_PIO)
 		return KVM_PIO_BUS;
+
 	if (flags & KVM_IOEVENTFD_FLAG_VIRTIO_CCW_NOTIFY)
 		return KVM_VIRTIO_CCW_NOTIFY_BUS;
+
 	return KVM_MMIO_BUS;
 }
 
@@ -798,31 +872,35 @@ static int kvm_assign_ioeventfd_idx(struct kvm *kvm,
 				struct kvm_ioeventfd *args)
 {
 
-	struct eventfd_ctx *eventfd;
 	struct _ioeventfd *p;
 	int ret;
 
+#if 0
+	struct eventfd_ctx *eventfd;
 	eventfd = eventfd_ctx_fdget(args->fd);
 	if (IS_ERR(eventfd))
 		return PTR_ERR(eventfd);
-
+#endif
 	p = kzalloc(sizeof(*p), GFP_KERNEL);
 	if (!p) {
 		ret = -ENOMEM;
 		goto fail;
 	}
 
+	p->evt_id = *(uint64_t*)args->pad;
+
 	INIT_LIST_HEAD(&p->list);
 	p->addr    = args->addr;
 	p->bus_idx = bus_idx;
 	p->length  = args->len;
-	p->eventfd = eventfd;
+	//p->eventfd = eventfd;
 
 	/* The datamatch feature is optional, otherwise this is a wildcard */
 	if (args->flags & KVM_IOEVENTFD_FLAG_DATAMATCH)
 		p->datamatch = args->datamatch;
 	else
 		p->wildcard = true;
+
 
 	mutex_lock(&kvm->slots_lock);
 
@@ -851,7 +929,7 @@ unlock_fail:
 
 fail:
 	kfree(p);
-	eventfd_ctx_put(eventfd);
+	//eventfd_ctx_put(eventfd);
 
 	return ret;
 }
@@ -861,13 +939,15 @@ kvm_deassign_ioeventfd_idx(struct kvm *kvm, enum kvm_bus bus_idx,
 			   struct kvm_ioeventfd *args)
 {
 	struct _ioeventfd        *p, *tmp;
-	struct eventfd_ctx       *eventfd;
+	//struct eventfd_ctx       *eventfd;
 	struct kvm_io_bus	 *bus;
 	int                       ret = -ENOENT;
 
+#if 0
 	eventfd = eventfd_ctx_fdget(args->fd);
 	if (IS_ERR(eventfd))
 		return PTR_ERR(eventfd);
+#endif
 
 	mutex_lock(&kvm->slots_lock);
 
@@ -875,7 +955,7 @@ kvm_deassign_ioeventfd_idx(struct kvm *kvm, enum kvm_bus bus_idx,
 		bool wildcard = !(args->flags & KVM_IOEVENTFD_FLAG_DATAMATCH);
 
 		if (p->bus_idx != bus_idx ||
-		    p->eventfd != eventfd  ||
+	//	    p->eventfd != eventfd  ||
 		    p->addr != args->addr  ||
 		    p->length != args->len ||
 		    p->wildcard != wildcard)
@@ -895,7 +975,7 @@ kvm_deassign_ioeventfd_idx(struct kvm *kvm, enum kvm_bus bus_idx,
 
 	mutex_unlock(&kvm->slots_lock);
 
-	eventfd_ctx_put(eventfd);
+//	eventfd_ctx_put(eventfd);
 
 	return ret;
 }
