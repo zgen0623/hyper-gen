@@ -1,64 +1,22 @@
 #include <linux/slab.h>
-#include <linux/file.h>
-#include <linux/fdtable.h>
 #include <linux/mm.h>
 #include <linux/vmacache.h>
 #include <linux/stat.h>
-#include <linux/fcntl.h>
-#include <linux/swap.h>
 #include <linux/string.h>
 #include <linux/init.h>
 #include <linux/sched/mm.h>
-#include <linux/sched/coredump.h>
-#include <linux/sched/signal.h>
-#include <linux/sched/numa_balancing.h>
 #include <linux/sched/task.h>
 #include <linux/pagemap.h>
-#include <linux/perf_event.h>
 #include <linux/highmem.h>
 #include <linux/spinlock.h>
-#include <linux/key.h>
-#include <linux/personality.h>
-#include <linux/binfmts.h>
-#include <linux/utsname.h>
-#include <linux/pid_namespace.h>
 #include <linux/module.h>
-#include <linux/namei.h>
-#include <linux/mount.h>
-#include <linux/security.h>
-#include <linux/syscalls.h>
-#include <linux/tsacct_kern.h>
-#include <linux/cn_proc.h>
-#include <linux/audit.h>
-#include <linux/tracehook.h>
-#include <linux/kmod.h>
-#include <linux/fsnotify.h>
-#include <linux/fs_struct.h>
-#include <linux/pipe_fs_i.h>
-#include <linux/oom.h>
-#include <linux/compat.h>
-#include <linux/vmalloc.h>
-
-#include <trace/events/fs.h>
-
-#include <linux/uaccess.h>
-#include <asm/mmu_context.h>
-#include <asm/tlb.h>
-#include <linux/kvm_host.h>
 #include <linux/export.h>
 #include <linux/vmalloc.h>
 #include <linux/uaccess.h>
 #include <linux/sched/stat.h>
-
 #include <asm/processor.h>
-#include <asm/user.h>
-#include <asm/fpu/xstate.h>
 #include <asm/cpu.h>
-#include <asm/processor.h>
-#include <asm/processor.h>
-#include <asm/mwait.h>
 #include <linux/kvm_host.h>
-#include <asm/pvclock.h>
 #include "kvm_cache_regs.h"
 #include "lapic.h"
 #include "trace.h"
@@ -73,53 +31,160 @@
 #include "hyperv.h"
 #include "regs.h"
 #include "machine.h"
+#include "vpci.h"
+#include "vblk.h"
 
+#define GSI_COUNT 4095
 
-#include <linux/clocksource.h>
-#include <linux/interrupt.h>
-#include <linux/kvm.h>
-#include <linux/fs.h>
-#include <linux/vmalloc.h>
-#include <linux/export.h>
-#include <linux/moduleparam.h>
-#include <linux/mman.h>
-#include <linux/highmem.h>
-#include <linux/iommu.h>
-#include <linux/intel-iommu.h>
-#include <linux/cpufreq.h>
-#include <linux/user-return-notifier.h>
-#include <linux/srcu.h>
-#include <linux/slab.h>
-#include <linux/perf_event.h>
-#include <linux/uaccess.h>
-#include <linux/hash.h>
-#include <linux/pci.h>
-#include <linux/timekeeper_internal.h>
-#include <linux/pvclock_gtod.h>
-#include <linux/kvm_irqfd.h>
-#include <linux/irqbypass.h>
-#include <linux/sched/stat.h>
-#include <linux/mem_encrypt.h>
+static void set_gsi(struct kvm *kvm, unsigned int gsi)
+{
+    set_bit(gsi, kvm->used_gsi_bitmap);
+}
 
-#include <trace/events/kvm.h>
+static void clear_gsi(struct kvm *kvm, unsigned int gsi)
+{
+    clear_bit(gsi, kvm->used_gsi_bitmap);
+}
 
-#include <asm/debugreg.h>
-#include <asm/msr.h>
-#include <asm/desc.h>
-#include <asm/mce.h>
-#include <linux/kernel_stat.h>
-#include <asm/fpu/internal.h> /* Ugh! */
-#include <asm/div64.h>
-#include <asm/irq_remapping.h>
+void kvm_irqchip_release_virq(struct kvm *kvm, int virq)
+{
+    struct kvm_irq_routing_entry *e;
+    int i;
 
-//the following are hardcode for tempolory
-#define CPUS 2
-#define DIES 1
-#define CORES 2
-#define THREADS 1
-#define RAM_SIZE 0x80000000
-#define KERNEL_PATH "/home/gen/openSource/guen/vmlinux"
-#define KERNEL_CMDLINE  "console=ttyS0 root=/dev/sda"
+    for (i = 0; i < kvm->irq_routes->nr; i++) {
+        e = &kvm->irq_routes->entries[i];
+        if (e->gsi == virq) {
+            kvm->irq_routes->nr--;
+            *e = kvm->irq_routes->entries[kvm->irq_routes->nr];
+        }
+    }
+
+    clear_gsi(kvm, virq);
+}
+
+static int kvm_irqchip_get_virq(struct kvm *kvm)
+{
+    int next_virq;
+
+    /* Return the lowest unused GSI in the bitmap */
+    next_virq = find_first_zero_bit(kvm->used_gsi_bitmap, GSI_COUNT);
+
+    if (next_virq >= GSI_COUNT) {
+        return -ENOSPC;
+    } else {
+        return next_virq;
+    }
+}
+
+static void kvm_add_routing_entry(struct kvm *kvm,
+                                  struct kvm_irq_routing_entry *entry)
+{   
+    struct kvm_irq_routing_entry *new;
+    int n, size;
+
+    if (kvm->irq_routes->nr == kvm->ent_allocated) {
+		void *new_routes;
+		int old_n = kvm->ent_allocated;
+
+        n = kvm->ent_allocated * 2;
+        if (n < 64)
+            n = 64;
+
+        size = sizeof(struct kvm_irq_routing);
+        size += n * sizeof(*new);
+        new_routes = kzalloc(size, GFP_KERNEL);
+
+		memcpy(new_routes, kvm->irq_routes,
+			sizeof(struct kvm_irq_routing) + old_n * sizeof(*new));
+		kfree(kvm->irq_routes);
+
+        kvm->irq_routes = new_routes;
+
+        kvm->ent_allocated = n;
+    } 
+
+    n = kvm->irq_routes->nr++;
+    new = &kvm->irq_routes->entries[n];
+    
+    *new = *entry;
+    
+    set_gsi(kvm, entry->gsi);
+}
+
+void kvm_irqchip_commit_routes(struct kvm *kvm)
+{                                
+	int r;
+	struct kvm_irq_routing *routing = kvm->irq_routes;
+
+    routing->flags = 0;
+
+	r = kvm_set_irq_routing(kvm, routing->entries, routing->nr, routing->flags);
+	if (r < 0) {
+		printk(">>>>>fail to irq routing %s:%d ret=%d\n", __func__, __LINE__, r);
+	}
+}
+
+static int kvm_update_routing_entry(struct kvm *kvm,
+                                    struct kvm_irq_routing_entry *new_entry)
+{
+    struct kvm_irq_routing_entry *entry;
+    int n;
+
+    for (n = 0; n < kvm->irq_routes->nr; n++) {
+        entry = &kvm->irq_routes->entries[n];
+        if (entry->gsi != new_entry->gsi)
+            continue;
+
+        if(!memcmp(entry, new_entry, sizeof *entry))
+            return 0;
+
+        *entry = *new_entry;
+
+        return 0;
+    }
+
+    return -ESRCH;
+}
+
+int kvm_irqchip_update_msi_route(struct kvm *kvm, int virq, MSIMessage msg,
+                                 PCIDevice *dev)
+{   
+    struct kvm_irq_routing_entry kroute = {}; 
+
+    kroute.gsi = virq;
+    kroute.type = KVM_IRQ_ROUTING_MSI;
+    kroute.flags = 0;
+    kroute.u.msi.address_lo = (uint32_t)msg.address;
+    kroute.u.msi.address_hi = msg.address >> 32;
+    kroute.u.msi.data = le32_to_cpu(msg.data);
+    
+    return kvm_update_routing_entry(kvm, &kroute);
+}
+
+int kvm_irqchip_add_msi_route(struct kvm *kvm, int vector, PCIDevice *dev)
+{       
+    struct kvm_irq_routing_entry kroute = {};
+    int virq;
+    MSIMessage msg = {0, 0};
+        
+    msg = pci_get_msi_message(dev, vector);
+
+    virq = kvm_irqchip_get_virq(kvm);
+    if (virq < 0)
+        return virq;                         
+    
+    kroute.gsi = virq;
+    kroute.type = KVM_IRQ_ROUTING_MSI;
+    kroute.flags = 0;
+    kroute.u.msi.address_lo = (uint32_t)msg.address;
+    kroute.u.msi.address_hi = msg.address >> 32;
+    kroute.u.msi.data = msg.data;
+
+    kvm_add_routing_entry(kvm, &kroute);
+	kvm_irqchip_commit_routes(kvm);
+
+    return virq;
+}
 
 void init_vm_possible_cpus(struct kvm *kvm)
 {
@@ -239,8 +304,8 @@ static void load_linux_mini(struct kvm_vcpu *vcpu)
 static void load_cmdline_mini(struct kvm_vcpu *vcpu)
 {
     const char *kernel_cmdline = KERNEL_CMDLINE;
-	struct gfn_to_hva_cache ghc;
     uint64_t len = strlen(kernel_cmdline) + 1;
+	struct gfn_to_hva_cache ghc;
 
 	if (kvm_gfn_to_hva_cache_init(vcpu->kvm, &ghc, KERNEL_CMDLINE_ADDR,
 			len)) {
@@ -523,18 +588,87 @@ static void build_bootparams_mini(struct kvm_vcpu *vcpu)
     add_e820_entry(boot_params, 0x100000, RAM_SIZE - 0x100000, E820_RAM);
 }
 
-static void create_net_device(struct kvm_vcpu *vcpu)
+static void kvm_irqchip_add_irq_route(struct kvm *kvm,
+		int irq, int irqchip, int pin)
 {
+    struct kvm_irq_routing_entry e;
 
+    e.gsi = irq;
+    e.type = KVM_IRQ_ROUTING_IRQCHIP;
+    e.flags = 0;
+    e.u.irqchip.irqchip = irqchip;
+    e.u.irqchip.pin = pin;
+
+    kvm_add_routing_entry(kvm, &e);
+//	routing->entries[routing->nr] = e;
+//	routing->nr++;
+
+//	set_gsi(, e.gsi);
 }
 
-static void create_block_device(struct kvm_vcpu *vcpu)
+static void kvm_pc_setup_irq_routing(struct kvm *kvm)
+{   
+    int i;
+	int r;
+#if 0
+	struct kvm_irq_routing *routing;
+	struct kvm_irq_routing_entry *entries = NULL;
+	int ent_nr = 7 + 8 + 23;
+#endif
+
+	kvm->used_gsi_bitmap = bitmap_new(GSI_COUNT);
+	kvm->irq_routes = kzalloc(sizeof(struct kvm_irq_routing), GFP_KERNEL);
+	kvm->ent_allocated = 0;
+
+#if 0
+	routing = kzalloc(sizeof(*routing) + ent_nr * sizeof(*entries), GFP_KERNEL);
+	if (!routing) {
+		printk(">>>>>fail to irq routing %s:%d\n", __func__, __LINE__);
+		return;
+	}
+
+	kvm->ent_allocated = ent_nr;
+	routing->nr = 0;
+#endif
+        
+    for (i = 0; i < 8; ++i) {
+        if (i == 2) {
+            continue;
+        }
+        kvm_irqchip_add_irq_route(kvm, i, KVM_IRQCHIP_PIC_MASTER, i);
+    }
+
+    for (i = 8; i < 16; ++i) {
+        kvm_irqchip_add_irq_route(kvm, i, KVM_IRQCHIP_PIC_SLAVE, i - 8);
+    }
+
+    for (i = 0; i < 24; ++i) {
+        if (i == 0) {
+            kvm_irqchip_add_irq_route(kvm, i, KVM_IRQCHIP_IOAPIC, 2);
+        } else if (i != 2) {
+            kvm_irqchip_add_irq_route(kvm, i, KVM_IRQCHIP_IOAPIC, i);
+        }
+    }
+
+	r = kvm_set_irq_routing(kvm, kvm->irq_routes->entries, kvm->irq_routes->nr, 0);
+	if (r) {
+		printk(">>>>>fail to irq routing %s:%d\n", __func__, __LINE__);
+	}
+
+	//kvm->irq_routes = routing;
+
+	return;
+}
+
+static void create_vnet(struct kvm_vcpu *vcpu)
 {
 
 }
 
 void init_virt_machine(struct kvm_vcpu *vcpu)
 {
+	INIT_LIST_HEAD(&vcpu->pci_bar_update_list);
+
 	if (vcpu->vcpu_id != 0)
 		return;
 
@@ -547,70 +681,9 @@ void init_virt_machine(struct kvm_vcpu *vcpu)
 	
 	build_bootparams_mini(vcpu);
 
-	if (1 == 0) {
-	create_pci(vcpu);
-	create_block_device(vcpu);
-	create_net_device(vcpu);
-	}
-}
-
-static void kvm_irqchip_add_irq_route(struct kvm_irq_routing *routing,
-		int irq, int irqchip, int pin)
-{
-    struct kvm_irq_routing_entry e = {};
-
-    e.gsi = irq;
-    e.type = KVM_IRQ_ROUTING_IRQCHIP;
-    e.flags = 0;
-    e.u.irqchip.irqchip = irqchip;
-    e.u.irqchip.pin = pin;
-
-	routing->entries[routing->nr] = e;
-	routing->nr++;
-}
-
-static void kvm_pc_setup_irq_routing(struct kvm *kvm)
-{   
-    int i;
-	int r;
-	struct kvm_irq_routing *routing;
-	struct kvm_irq_routing_entry *entries = NULL;
-	int ent_nr = 7 + 8 + 23;
-
-	routing = vmalloc(sizeof(*routing) + ent_nr * sizeof(*entries));
-	if (!entries) {
-		printk(">>>>>fail to irq routing %s:%d\n", __func__, __LINE__);
-		return;
-	}	
-	routing->nr = 0;
-        
-    for (i = 0; i < 8; ++i) {
-        if (i == 2) {
-            continue;
-        }
-        kvm_irqchip_add_irq_route(routing, i, KVM_IRQCHIP_PIC_MASTER, i);
-    }
-
-    for (i = 8; i < 16; ++i) {
-        kvm_irqchip_add_irq_route(routing, i, KVM_IRQCHIP_PIC_SLAVE, i - 8);
-    }
-
-    for (i = 0; i < 24; ++i) {
-        if (i == 0) {
-            kvm_irqchip_add_irq_route(routing, i, KVM_IRQCHIP_IOAPIC, 2);
-        } else if (i != 2) {
-            kvm_irqchip_add_irq_route(routing, i, KVM_IRQCHIP_IOAPIC, i);
-        }
-    }
-
-	r = kvm_set_irq_routing(kvm, routing->entries, routing->nr, 0);
-	if (r) {
-		printk(">>>>>fail to irq routing %s:%d\n", __func__, __LINE__);
-	}
-
-	vfree(routing);
-
-	return;
+	create_vpci(vcpu);
+	create_vblk(vcpu);
+	create_vnet(vcpu);
 }
 
 int create_virt_machine(struct kvm *kvm)
@@ -663,8 +736,10 @@ int create_virt_machine(struct kvm *kvm)
 	if (!kvm->arch.vpit)
 		kvm->arch.vpit = kvm_create_pit(kvm, 0);
 
-//	kvm_pc_setup_irq_routing(kvm);
-	
+	kvm_pc_setup_irq_routing(kvm);
+
+	mutex_init(&kvm->evt_list_lock);
+	INIT_LIST_HEAD(&kvm->evt_list);
 
 create_irqchip_unlock:
 	mutex_unlock(&kvm->lock);

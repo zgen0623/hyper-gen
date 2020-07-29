@@ -44,6 +44,11 @@
 
 static struct workqueue_struct *irqfd_cleanup_wq;
 
+void vpci_bar_update(enum kvm_bus bus_idx,
+			       struct kvm_io_device *dev,
+					enum kvm_pci_bar_update_type type,
+					uint64_t addr, uint64_t size);
+
 bool __attribute__((weak))
 kvm_arch_irqfd_allowed(struct kvm *kvm, struct kvm_irqfd *args)
 {
@@ -669,7 +674,6 @@ struct _ioeventfd {
 	struct list_head     list;
 	u64                  addr;
 	int                  length;
-//	struct eventfd_ctx  *eventfd;
 	u64                  datamatch;
 	struct kvm_io_device dev;
 	u8                   bus_idx;
@@ -687,8 +691,6 @@ to_ioeventfd(struct kvm_io_device *dev)
 static void
 ioeventfd_release(struct _ioeventfd *p)
 {
-//	eventfd_ctx_put(p->eventfd);
-
 	list_del(&p->list);
 	kfree(p);
 }
@@ -744,26 +746,15 @@ ioeventfd_write(struct kvm_vcpu *vcpu, struct kvm_io_device *this, gpa_t addr,
 		int len, const void *val)
 {
 	struct _ioeventfd *p = to_ioeventfd(this);
+	printk(">>>>%s:%d\n", __func__, __LINE__);
 
 	if (!ioeventfd_in_range(p, addr, len, val))
 		return -EOPNOTSUPP;
 
-//	eventfd_signal(p->eventfd, 1);
-#if 0
-	if (p->evt_id >= 3)
-		printk(">>>>>%s:%d\n", __func__, __LINE__);
-#endif
-
-	//wake up vhost thread conditionly
 	if (p->wq_head != NULL) {
-#if 0
-		if (p->evt_id >= 3)
-			printk(">>>>>%s:%d\n", __func__, __LINE__);
-#endif
-
+		printk(">>>>%s:%d\n", __func__, __LINE__);
     	wake_up(p->wq_head);
 	}
-
 
 	return 0;
 }
@@ -807,7 +798,6 @@ void vhost_alloc_notify_evt(uint64_t evt_id, uint64_t kvm_id,
 	init_waitqueue_head(head);
 
 	add_wait_queue(head, entry);
-
 //	printk(">>>>>%s:%d evt=%d\n",__func__, __LINE__, evt_id);
 
 	mutex_lock(&kvm->slots_lock);
@@ -820,6 +810,9 @@ void vhost_alloc_notify_evt(uint64_t evt_id, uint64_t kvm_id,
 	mutex_unlock(&kvm->slots_lock);
 }
 EXPORT_SYMBOL_GPL(vhost_alloc_notify_evt);
+
+
+
 
 /*
  * This function is called as KVM is completely shutting down.  We do not
@@ -875,12 +868,6 @@ static int kvm_assign_ioeventfd_idx(struct kvm *kvm,
 	struct _ioeventfd *p;
 	int ret;
 
-#if 0
-	struct eventfd_ctx *eventfd;
-	eventfd = eventfd_ctx_fdget(args->fd);
-	if (IS_ERR(eventfd))
-		return PTR_ERR(eventfd);
-#endif
 	p = kzalloc(sizeof(*p), GFP_KERNEL);
 	if (!p) {
 		ret = -ENOMEM;
@@ -912,10 +899,7 @@ static int kvm_assign_ioeventfd_idx(struct kvm *kvm,
 
 	kvm_iodevice_init(&p->dev, &ioeventfd_ops);
 
-	ret = kvm_io_bus_register_dev(kvm, bus_idx, p->addr, p->length,
-				      &p->dev);
-	if (ret < 0)
-		goto unlock_fail;
+	vpci_bar_update(bus_idx, &p->dev, PCI_BAR_REGISTER, p->addr, p->length);
 
 	kvm_get_bus(kvm, bus_idx)->ioeventfd_count++;
 	list_add_tail(&p->list, &kvm->ioeventfds);
@@ -1051,3 +1035,4 @@ kvm_ioeventfd(struct kvm *kvm, struct kvm_ioeventfd *args)
 
 	return kvm_assign_ioeventfd(kvm, args);
 }
+EXPORT_SYMBOL_GPL(kvm_ioeventfd);

@@ -241,6 +241,22 @@ struct kvm_mmio_fragment {
 	unsigned len;
 };
 
+
+enum kvm_pci_bar_update_type {
+	PCI_BAR_REGISTER = 0,
+	PCI_BAR_UNREGISTER = 1,
+};
+
+struct kvm_pci_bar_reg_info {
+	enum kvm_bus bus_idx;
+	struct kvm_io_device *dev;
+	enum kvm_pci_bar_update_type type;
+	struct list_head node;
+	uint64_t addr;
+	uint64_t size;
+};
+
+
 struct kvm_vcpu {
 	struct kvm *kvm;
 #ifdef CONFIG_PREEMPT_NOTIFIERS
@@ -301,6 +317,7 @@ struct kvm_vcpu {
 	bool preempted;
 	struct kvm_vcpu_arch arch;
 	struct dentry *debugfs_dentry;
+	struct list_head pci_bar_update_list;
 };
 
 static inline int kvm_vcpu_exiting_guest_mode(struct kvm_vcpu *vcpu)
@@ -437,6 +454,7 @@ struct virt_devices {
 	void *vnet;
 };
 
+
 struct kvm {
 	spinlock_t mmu_lock;
 	struct mutex slots_lock;
@@ -451,6 +469,7 @@ struct kvm {
 	 * and is accessed atomically.
 	 */
 	atomic_t online_vcpus;
+	atomic_t running_vcpus;
 	int created_vcpus;
 	int last_boosted_vcpu;
 	struct list_head vm_list;
@@ -502,6 +521,11 @@ struct kvm {
 
 	struct virt_devices vdevices;
 	uint64_t id;
+	struct kvm_irq_routing *irq_routes;
+	long unsigned *used_gsi_bitmap;
+	int ent_allocated;
+	struct mutex evt_list_lock;
+	struct list_head evt_list;
 };
 
 #define kvm_err(fmt, ...) \

@@ -92,9 +92,9 @@ struct vhost_virtqueue {
 	/* The actual ring of buffers. */
 	struct mutex mutex;
 	unsigned int num;
-	struct vring_desc __user *desc;
-	struct vring_avail __user *avail;
-	struct vring_used __user *used;
+	struct vring_desc  *desc;
+	struct vring_avail  *avail;
+	struct vring_used  *used;
 	const struct vhost_umem_node *meta_iotlb[VHOST_NUM_ADDRS];
 //	struct file *kick;
 	int notify_status;

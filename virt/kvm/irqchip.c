@@ -233,6 +233,7 @@ int kvm_set_irq_routing(struct kvm *kvm,
 	for (i = 0; i < nr; ++i) {
 		if (ue[i].gsi >= KVM_MAX_IRQ_ROUTES)
 			return -EINVAL;
+
 		nr_rt_entries = max(nr_rt_entries, ue[i].gsi);
 	}
 
@@ -240,7 +241,6 @@ int kvm_set_irq_routing(struct kvm *kvm,
 
 	new = kzalloc(sizeof(*new) + (nr_rt_entries * sizeof(struct hlist_head)),
 		      GFP_KERNEL);
-
 	if (!new)
 		return -ENOMEM;
 

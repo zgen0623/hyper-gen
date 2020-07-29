@@ -613,8 +613,7 @@ static struct kvm *kvm_create_vm(unsigned long type)
 	if (!kvm)
 		return ERR_PTR(-ENOMEM);
 
-//	kvm->id = kvm_id++;
-	kvm->id = 0;
+	kvm->id = kvm_id++;
 
 	spin_lock_init(&kvm->mmu_lock);
 	mmgrab(current->mm);
@@ -2739,6 +2738,13 @@ static int kvm_vcpu_ioctl_set_sigmask(struct kvm_vcpu *vcpu, sigset_t *sigset)
 	return 0;
 }
 
+bool vm_running(struct kvm *vm)
+{
+	return atomic_read(&vm->online_vcpus) ==
+			atomic_read(&vm->running_vcpus);
+}
+EXPORT_SYMBOL_GPL(vm_running);
+
 static long kvm_vcpu_ioctl(struct file *filp,
 			   unsigned int ioctl, unsigned long arg)
 {
@@ -2763,7 +2769,6 @@ static long kvm_vcpu_ioctl(struct file *filp,
 		return kvm_arch_vcpu_ioctl(filp, ioctl, arg);
 #endif
 
-
 	r = vcpu_load(vcpu);
 	if (r)
 		return r;
@@ -2783,6 +2788,9 @@ static long kvm_vcpu_ioctl(struct file *filp,
 				synchronize_rcu();
 			put_pid(oldpid);
 		}
+
+		atomic_inc(&vcpu->kvm->running_vcpus);
+
 		r = kvm_arch_vcpu_ioctl_run(vcpu, vcpu->run);
 		trace_kvm_userspace_exit(vcpu->run->exit_reason, r);
 		break;
@@ -3754,8 +3762,11 @@ int kvm_io_bus_register_dev(struct kvm *kvm, enum kvm_bus bus_idx, gpa_t addr,
 	memcpy(new_bus, bus, sizeof(*bus) + (bus->dev_count *
 	       sizeof(struct kvm_io_range)));
 	kvm_io_bus_insert_dev(new_bus, dev, addr, len);
+
 	rcu_assign_pointer(kvm->buses[bus_idx], new_bus);
+
 	synchronize_srcu_expedited(&kvm->srcu);
+
 	kfree(bus);
 
 	return 0;

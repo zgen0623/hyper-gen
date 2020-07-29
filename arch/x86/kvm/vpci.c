@@ -39,8 +39,434 @@
 #include "machine.h"
 #include "vpci.h"
 
+void vpci_bar_update(enum kvm_bus bus_idx,
+			       struct kvm_io_device *dev,
+					enum kvm_pci_bar_update_type type,
+					uint64_t addr, uint64_t size);
+
+void handle_vpci_bar_update(struct kvm_vcpu *vcpu);
+
+static void msix_handle_mask_update(PCIDevice *dev, int vector, bool was_masked);
+static int pci_bar(PCIDevice *d, int reg);
+static void pci_irq_handler(void *opaque, int irq_num, int level);
+
+static int vpci_intx(PCIDevice *pci_dev)
+{
+    return pci_get_byte(pci_dev->config + PCI_INTERRUPT_PIN) - 1;
+}
+
+unsigned int msix_nr_vectors_allocated(const PCIDevice *dev)
+{           
+    return dev->msix_entries_nr;
+}   
+
+void pci_set_irq(PCIDevice *pci_dev, int level)
+{
+    int intx = vpci_intx(pci_dev);
+    pci_irq_handler(pci_dev, intx, level);
+}
+
+static void msix_free_irq_entries(PCIDevice *dev)
+{
+    int vector;
+
+    for (vector = 0; vector < dev->msix_entries_nr; ++vector) {
+        dev->msix_entry_used[vector] = 0;
+        msix_clr_pending(dev, vector);
+    }
+}
+
+static int msix_set_notifier_for_vector(PCIDevice *dev, unsigned int vector)
+{
+    MSIMessage msg;
+
+    if (msix_is_masked(dev, vector))
+        return 0;
+
+    msg = msix_get_message(dev, vector);
+
+    return dev->msix_vector_use_notifier(dev, vector, msg);
+}
+
+static void msix_unset_notifier_for_vector(PCIDevice *dev, unsigned int vector)
+{
+    if (msix_is_masked(dev, vector))
+        return;
+
+    dev->msix_vector_release_notifier(dev, vector);
+}
 
 
+int msix_set_vector_notifiers(PCIDevice *dev,
+                              MSIVectorUseNotifier use_notifier,
+                              MSIVectorReleaseNotifier release_notifier,
+                              MSIVectorPollNotifier poll_notifier)
+{           
+    int vector, ret;
+    
+    dev->msix_vector_use_notifier = use_notifier;
+    dev->msix_vector_release_notifier = release_notifier;
+    dev->msix_vector_poll_notifier = poll_notifier;
+        
+    if ((dev->config[dev->msix_cap + MSIX_CONTROL_OFFSET] &
+        (MSIX_ENABLE_MASK | MSIX_MASKALL_MASK)) == MSIX_ENABLE_MASK) {
+        for (vector = 0; vector < dev->msix_entries_nr; vector++) {
+            ret = msix_set_notifier_for_vector(dev, vector);
+            if (ret < 0)
+                goto undo;
+        }
+    }
+
+    if (dev->msix_vector_poll_notifier)
+        dev->msix_vector_poll_notifier(dev, 0, dev->msix_entries_nr);
+
+    return 0;
+
+undo:
+    while (--vector >= 0)
+        msix_unset_notifier_for_vector(dev, vector);
+
+    dev->msix_vector_use_notifier = NULL;
+    dev->msix_vector_release_notifier = NULL;
+    return ret;
+}
+
+
+
+MSIMessage pci_get_msi_message(PCIDevice *dev, int vector)
+{   
+    MSIMessage msg;
+
+    if (msix_enabled(dev)) {
+        msg = msix_get_message(dev, vector);
+    } else if (msi_enabled(dev)) {
+        msg = msi_get_message(dev, vector);
+    }
+
+    return msg;
+} 
+
+
+void msix_unuse_all_vectors(PCIDevice *dev)
+{   
+    if (!msix_present(dev))
+        return;
+
+    msix_free_irq_entries(dev);
+}   
+   
+
+void msix_vector_unuse(PCIDevice *dev, unsigned vector)
+{   
+    if (vector >= dev->msix_entries_nr || !dev->msix_entry_used[vector])
+        return;
+
+    if (--dev->msix_entry_used[vector])
+        return;
+
+    msix_clr_pending(dev, vector);
+}  
+
+int msix_vector_use(PCIDevice *dev, unsigned vector) 
+{           
+    if (vector >= dev->msix_entries_nr)
+        return -EINVAL;         
+        
+    dev->msix_entry_used[vector]++;
+
+    return 0;
+} 
+
+
+static void msix_mask_all(PCIDevice *dev, unsigned nentries)
+{
+    int vector;
+
+    for (vector = 0; vector < nentries; ++vector) {
+        unsigned offset =
+            vector * PCI_MSIX_ENTRY_SIZE + PCI_MSIX_ENTRY_VECTOR_CTRL;
+        bool was_masked = msix_is_masked(dev, vector);
+
+        dev->msix_table[offset] |= PCI_MSIX_ENTRY_CTRL_MASKBIT;
+        msix_handle_mask_update(dev, vector, was_masked);
+    }
+}
+
+static int msix_init(PCIDevice *dev, unsigned short nentries,
+              uint8_t table_bar_nr,
+              unsigned table_offset, 
+              uint8_t pba_bar_nr, unsigned pba_offset, uint8_t cap_pos, unsigned bar_size)
+{
+    int cap;
+    unsigned table_size, pba_size;
+    uint8_t *config;
+
+    if (nentries < 1 || nentries > PCI_MSIX_FLAGS_QSIZE + 1) {
+        printk(">>>>The number of MSI-X vectors is invalid\n");
+        return -EINVAL;
+    }
+
+    table_size = nentries * PCI_MSIX_ENTRY_SIZE;
+    pba_size = ALIGN_UP(nentries, 64) / 8;
+
+    /* Sanity test: table & pba don't overlap, fit within BARs, min aligned */
+    if ((table_bar_nr == pba_bar_nr &&
+         ranges_overlap(table_offset, table_size, pba_offset, pba_size)) ||
+        table_offset + table_size > bar_size ||
+        pba_offset + pba_size > bar_size ||
+        (table_offset | pba_offset) & PCI_MSIX_FLAGS_BIRMASK) {
+        printk(">>>>>>error: table & pba overlap, or they don't fit in BARs,"
+                   " or don't align\n");
+        return -EINVAL;
+    }
+
+    cap = pci_add_capability(dev, PCI_CAP_ID_MSIX,
+                              cap_pos, MSIX_CAP_LENGTH);
+    if (cap < 0) {
+        return cap;
+    }
+
+    dev->msix_cap = cap;
+    dev->cap_present |= QEMU_PCI_CAP_MSIX;
+    config = dev->config + cap;
+
+    pci_set_word(config + PCI_MSIX_FLAGS, nentries - 1);
+    dev->msix_entries_nr = nentries;
+    dev->msix_function_masked = true;
+
+    pci_set_long(config + PCI_MSIX_TABLE, table_offset | table_bar_nr);
+    pci_set_long(config + PCI_MSIX_PBA, pba_offset | pba_bar_nr);
+
+    /* Make flags bit writable. */
+    dev->wmask[cap + MSIX_CONTROL_OFFSET] |= MSIX_ENABLE_MASK |
+                                             MSIX_MASKALL_MASK;
+    dev->msix_table = kzalloc(table_size, GFP_KERNEL);
+    dev->msix_pba = kzalloc(pba_size, GFP_KERNEL);
+    dev->msix_entry_used = kzalloc(nentries * sizeof *dev->msix_entry_used, GFP_KERNEL);
+
+    msix_mask_all(dev, nentries);
+
+    return 0;
+}
+
+void pci_register_bar(PCIDevice *pci_dev, int bar_num,
+                      uint8_t type, pcibus_t size,
+					struct kvm_io_device_ops *ops,
+					enum kvm_bus bus_idx)
+{
+    PCIIORegion *r;
+    uint32_t addr; /* offset in pci config space */
+    uint64_t wmask;
+
+    if (size & (size-1)) {
+        printk(">>>>ERROR: PCI region size must be pow2 "
+                    "type=0x%x, size=0x%llx\n", type, size);
+		return;
+    }
+
+    r = &pci_dev->io_regions[bar_num];
+
+    r->addr = PCI_BAR_UNMAPPED;
+    r->size = size;
+    r->type = type;
+	r->bus_idx = bus_idx;
+	r->pci_dev = pci_dev;
+	kvm_iodevice_init(&r->dev, ops);
+
+    wmask = ~(size - 1);
+    if (bar_num == PCI_ROM_SLOT) {
+        /* ROM enable bit is writable */
+        wmask |= PCI_ROM_ADDRESS_ENABLE;
+    }
+
+    addr = pci_bar(pci_dev, bar_num);
+    pci_set_long(pci_dev->config + addr, type);
+
+    if (!(r->type & PCI_BASE_ADDRESS_SPACE_IO) &&
+        r->type & PCI_BASE_ADDRESS_MEM_TYPE_64) {
+        pci_set_quad(pci_dev->wmask + addr, wmask);
+        pci_set_quad(pci_dev->cmask + addr, ~0ULL);
+    } else {
+        pci_set_long(pci_dev->wmask + addr, wmask & 0xffffffff);
+        pci_set_long(pci_dev->cmask + addr, 0xffffffff);
+    }
+}
+
+
+static uint32_t msix_table_mmio_read(PCIDevice *dev, hwaddr offset,
+                                     unsigned size)
+{
+    return pci_get_long(dev->msix_table + offset);
+}
+
+static uint32_t msix_pba_mmio_read(PCIDevice *dev, hwaddr offset,
+                                   unsigned size)
+{
+    if (dev->msix_vector_poll_notifier) {
+        unsigned vector_start = offset * 8;
+        unsigned vector_end = MIN(offset + size * 8, dev->msix_entries_nr);
+        dev->msix_vector_poll_notifier(dev, vector_start, vector_end);
+    }
+
+    return pci_get_long(dev->msix_pba + offset);
+}
+
+static int msix_bar_read(struct kvm_vcpu *vcpu, struct kvm_io_device *dev,
+			      gpa_t addr, int len, void *val)
+{
+	PCIIORegion *r = container_of(dev, PCIIORegion, dev);
+	PCIDevice *pci_dev = r->pci_dev;
+	uint32_t msix_pba_offset = pci_dev->msix_pba_offset;
+	uint32_t offset = addr - r->addr;	
+
+	if (offset < msix_pba_offset)
+		*(uint32_t*)val = msix_table_mmio_read(pci_dev, offset, len);
+	else
+		*(uint32_t*)val = msix_pba_mmio_read(pci_dev, offset - msix_pba_offset, len);
+
+	return 0;
+}
+
+static void msix_table_mmio_write(PCIDevice *dev, hwaddr offset,
+                                  uint32_t val, unsigned size)
+{
+    int vector = offset / PCI_MSIX_ENTRY_SIZE;
+    bool was_masked;
+
+    was_masked = msix_is_masked(dev, vector);
+    pci_set_long(dev->msix_table + offset, val);
+    msix_handle_mask_update(dev, vector, was_masked);
+}
+
+
+static int msix_bar_write(struct kvm_vcpu *vcpu, struct kvm_io_device *dev,
+			       gpa_t addr, int len, const void *val)
+{
+	PCIIORegion *r = container_of(dev, PCIIORegion, dev);
+	PCIDevice *pci_dev = r->pci_dev;
+	uint32_t msix_pba_offset = pci_dev->msix_pba_offset;
+	uint32_t offset = addr - r->addr;	
+
+	if (offset < msix_pba_offset)
+		msix_table_mmio_write(pci_dev, offset,
+                                  *(uint32_t*)val, len);
+
+	return 0;
+}
+
+
+static struct kvm_io_device_ops msix_bar_ops = {
+	.read     = msix_bar_read,
+	.write    = msix_bar_write,
+};
+
+
+int msix_init_exclusive_bar(PCIDevice *dev, unsigned short nentries,
+                            uint8_t bar_nr)
+{
+    int ret;
+    uint32_t bar_size = 4096;
+    uint32_t bar_pba_offset = bar_size / 2;
+    uint32_t bar_pba_size = ALIGN_UP(nentries, 64) / 8;
+
+    if (nentries * PCI_MSIX_ENTRY_SIZE > bar_pba_offset)
+        bar_pba_offset = nentries * PCI_MSIX_ENTRY_SIZE;
+
+    if (bar_pba_offset + bar_pba_size > 4096) {
+        bar_size = bar_pba_offset + bar_pba_size;
+	}
+
+	dev->msix_pba_offset = bar_pba_offset;
+
+    bar_size = pow2ceil(bar_size);
+
+    ret = msix_init(dev, nentries, bar_nr,
+                    0, 
+                    bar_nr, bar_pba_offset,
+                    0, bar_size);
+    if (ret)
+        return ret;
+
+    pci_register_bar(dev, bar_nr, PCI_BASE_ADDRESS_SPACE_MEMORY,
+                     bar_size, &msix_bar_ops, KVM_MMIO_BUS);
+
+    return 0;
+}
+
+
+
+
+static uint8_t pci_find_space(PCIDevice *pdev, uint8_t size)
+{
+    int offset = PCI_CONFIG_HEADER_SIZE;
+    int i;
+    for (i = PCI_CONFIG_HEADER_SIZE; i < PCI_CONFIG_SPACE_SIZE; ++i) {
+        if (pdev->used[i])
+            offset = i + 1;
+        else if (i - offset + 1 == size)
+            return offset;
+    }
+    return 0;
+}
+
+static uint8_t pci_find_capability_at_offset(PCIDevice *pdev, uint8_t offset)
+{
+    uint8_t next, prev, found = 0;
+
+    if (!(pdev->used[offset])) {
+        return 0;
+    }
+
+    for (prev = PCI_CAPABILITY_LIST; (next = pdev->config[prev]);
+         prev = next + PCI_CAP_LIST_NEXT) {
+        if (next <= offset && next > found) {
+            found = next;
+        }
+    }
+
+    return found;
+}
+
+
+int pci_add_capability(PCIDevice *pdev, uint8_t cap_id,
+                       uint8_t offset, uint8_t size)
+{
+    uint8_t *config;
+    int i, overlapping_cap;
+
+    if (!offset) {
+        offset = pci_find_space(pdev, size);
+		if (!offset) {
+			printk(">>>>error: %s:%d\n",__func__, __LINE__);
+			return -1;
+		}
+    } else {
+        for (i = offset; i < offset + size; i++) {
+            overlapping_cap = pci_find_capability_at_offset(pdev, i);
+            if (overlapping_cap) {
+                printk("%02x:%02x.%x "
+                           "Attempt to add PCI capability %x at offset "
+                           "%x overlaps existing capability %x at offset %x\n",
+                           0, PCI_SLOT(pdev->devfn), PCI_FUNC(pdev->devfn),
+                           cap_id, offset, overlapping_cap, i);
+                return -EINVAL;
+            }
+        }
+    }
+
+    config = pdev->config + offset;
+    config[PCI_CAP_LIST_ID] = cap_id;
+    config[PCI_CAP_LIST_NEXT] = pdev->config[PCI_CAPABILITY_LIST];
+    pdev->config[PCI_CAPABILITY_LIST] = offset;
+    pdev->config[PCI_STATUS] |= PCI_STATUS_CAP_LIST;
+    memset(pdev->used + offset, 0xFF, ALIGN_UP(size, 4));
+    /* Make capability read-only by default */
+    memset(pdev->wmask + offset, 0, size);
+    /* Check capability by default */
+    memset(pdev->cmask + offset, 0xFF, size);
+
+    return offset;
+}
 
 
 static bool pci_bus_devfn_available(PCIBus *bus, int devfn)
@@ -59,43 +485,6 @@ static void pci_config_alloc(PCIDevice *pci_dev)
     pci_dev->used = kzalloc(config_size , GFP_KERNEL);
 } 
 
-static inline uint16_t
-pci_get_word(const uint8_t *config)
-{
-    return *(uint16_t*)config;
-}
-
-static inline void
-pci_set_word(uint8_t *config, uint16_t val)
-{
-    *(uint16_t*)config = val;
-}   
-
-
-static inline uint32_t
-pci_get_long(const uint8_t *config)
-{   
-    return *(uint32_t*)config;
-}   
-
-static inline void 
-pci_set_long(const uint8_t *config, uint32_t val)
-{   
-    *(uint32_t*)config = val;
-}
-
-static inline void
-pci_set_quad(uint8_t *config, uint64_t val)
-{   
-    *(uint64_t*)config = val;
-}
-
-static inline uint64_t
-pci_get_quad(const uint8_t *config)
-{
-    return *(uint64_t*)config;
-}
-
 static void pci_init_cmask(PCIDevice *dev)
 {
     pci_set_word(dev->cmask + PCI_VENDOR_ID, 0xffff);
@@ -107,14 +496,6 @@ static void pci_init_cmask(PCIDevice *dev)
     dev->cmask[PCI_HEADER_TYPE] = 0xff;
     dev->cmask[PCI_CAPABILITY_LIST] = 0xff;
 }
-
-static inline uint16_t
-pci_word_test_and_set_mask(uint8_t *config, uint16_t mask)
-{       
-    uint16_t val = pci_get_word(config);
-    pci_set_word(config, val | mask);
-    return val & mask;
-}  
 
 static void pci_init_wmask(PCIDevice *dev)
 {
@@ -206,34 +587,6 @@ uint32_t pci_default_read_config(PCIDevice *d,
     return le32_to_cpu(val);
 }
 
-static inline int pci_irq_disabled(PCIDevice *d)
-{
-    return pci_get_word(d->config + PCI_COMMAND) & PCI_COMMAND_INTX_DISABLE;
-}
-
-static inline uint64_t range_get_last(uint64_t offset, uint64_t len)
-{                                
-    return offset + len - 1;
-}   
-
-/* Check whether a given range covers a given byte. */
-static inline int range_covers_byte(uint64_t offset, uint64_t len,
-                                    uint64_t byte)
-{
-    return offset <= byte && byte <= range_get_last(offset, len);
-}
-    
-/* Check whether 2 given ranges overlap.
- * Undefined if ranges that wrap around 0. */
-static inline int ranges_overlap(uint64_t first1, uint64_t len1,
-                                 uint64_t first2, uint64_t len2)
-{       
-    uint64_t last1 = range_get_last(first1, len1);
-    uint64_t last2 = range_get_last(first2, len2); 
-        
-    return !(last2 < first1 || last1 < first2);
-}
-
 static int pci_bar(PCIDevice *d, int reg)
 {
     uint8_t type;
@@ -303,7 +656,6 @@ static pcibus_t pci_bar_address(PCIDevice *d,
     return new_addr;
 }
 
-
 static void pci_update_mappings(PCIDevice *d)
 {
 	int ret;
@@ -325,32 +677,19 @@ static void pci_update_mappings(PCIDevice *d)
 
         /* now do the real mapping */
         if (r->addr != PCI_BAR_UNMAPPED) {
-			mutex_lock(&d->bus->kvm->slots_lock);
-			kvm_io_bus_unregister_dev(d->bus->kvm, KVM_MMIO_BUS, r->dev);
-			mutex_unlock(&d->bus->kvm->slots_lock);
-			if (ret < 0) {
+			vpci_bar_update(r->bus_idx, &r->dev, PCI_BAR_UNREGISTER, 0, 0);
+			if (ret < 0)
 				printk(">>>>error %s:%d\n",__func__, __LINE__);
-			}
         }
         
         r->addr = new_addr;
-        if (r->addr != PCI_BAR_UNMAPPED) {
-			mutex_lock(&d->bus->kvm->slots_lock);
-			ret = kvm_io_bus_register_dev(d->bus->kvm, KVM_MMIO_BUS, r->addr,
-				      r->size, r->dev);
-			mutex_unlock(&d->bus->kvm->slots_lock);
-			if (ret < 0) {
-				printk(">>>>error %s:%d\n",__func__, __LINE__);
-			}
-        }
+
+        if (r->addr != PCI_BAR_UNMAPPED)
+			vpci_bar_update(r->bus_idx, &r->dev, PCI_BAR_REGISTER, r->addr, r->size);
     }   
 } 
 
 
-static inline int pci_irq_state(PCIDevice *d, int irq_num)
-{
-    return (d->irq_state >> irq_num) & 0x1;
-}
 
 static void pci_change_irq_level(PCIDevice *pci_dev, int irq_num, int change)
 {
@@ -374,21 +713,6 @@ static void pci_update_irq_disabled(PCIDevice *d, int was_irq_disabled)
     }
 }
 
-static inline uint8_t msi_flags_off(const PCIDevice* dev)
-{
-    return dev->msi_cap + PCI_MSI_FLAGS;
-}
-
-static inline bool msi_present(const PCIDevice *dev)
-{
-    return dev->cap_present & QEMU_PCI_CAP_MSI;
-}
-
-static inline void pci_set_irq_state(PCIDevice *d, int irq_num, int level)
-{
-    d->irq_state &= ~(0x1 << irq_num);
-    d->irq_state |= level << irq_num;
-}
 
 static void pci_update_irq_status(PCIDevice *dev)
 {
@@ -424,27 +748,6 @@ void pci_device_deassert_intx(PCIDevice *dev)
     }
 } 
 
-static inline int ctz32(uint32_t val)
-{   
-    return val ? __builtin_ctz(val) : 32;
-}
-
-static inline unsigned int msi_nr_vectors(uint16_t flags)
-{
-    return 1U <<
-        ((flags & PCI_MSI_FLAGS_QSIZE) >> ctz32(PCI_MSI_FLAGS_QSIZE));
-}
-
-static inline uint8_t msi_pending_off(const PCIDevice* dev, bool msi64bit)
-{
-    return dev->msi_cap + (msi64bit ? PCI_MSI_PENDING_64 : PCI_MSI_PENDING_32);
-}
-
-static inline uint8_t msi_mask_off(const PCIDevice* dev, bool msi64bit)
-{
-    return dev->msi_cap + (msi64bit ? PCI_MSI_MASK_64 : PCI_MSI_MASK_32);
-}
-
 bool msi_is_masked(const PCIDevice *dev, unsigned int vector)
 {
     uint16_t flags = pci_get_word(dev->config + msi_flags_off(dev));
@@ -459,37 +762,6 @@ bool msi_is_masked(const PCIDevice *dev, unsigned int vector)
     return mask & (1U << vector);
 }
 
-static inline uint8_t msi_address_lo_off(const PCIDevice* dev)
-{
-    return dev->msi_cap + PCI_MSI_ADDRESS_LO;
-}
-
-static inline uint8_t msi_address_hi_off(const PCIDevice* dev)
-{
-    return dev->msi_cap + PCI_MSI_ADDRESS_HI;
-}
-
-static inline uint8_t msi_data_off(const PCIDevice* dev, bool msi64bit)
-{
-    return dev->msi_cap + (msi64bit ? PCI_MSI_DATA_64 : PCI_MSI_DATA_32);
-}
-
-static inline uint8_t msi_cap_sizeof(uint16_t flags) 
-{           
-    switch (flags & (PCI_MSI_FLAGS_MASKBIT | PCI_MSI_FLAGS_64BIT)) {
-    case PCI_MSI_FLAGS_MASKBIT | PCI_MSI_FLAGS_64BIT:
-        return PCI_MSI_64M_SIZEOF;
-    case PCI_MSI_FLAGS_64BIT:
-        return PCI_MSI_64_SIZEOF;
-    case PCI_MSI_FLAGS_MASKBIT:
-        return PCI_MSI_32M_SIZEOF;
-    case 0:
-        return PCI_MSI_32_SIZEOF;
-    default:
-        break;
-    }
-    return 0;
-}
 
 MSIMessage msi_get_message(PCIDevice *dev, unsigned int vector)
 {
@@ -528,22 +800,6 @@ void msi_send_message(PCIDevice *dev, MSIMessage msg)
 
 		kvm_set_msi(&route, dev->bus->kvm, KVM_USERSPACE_IRQ_SOURCE_ID, 1, false);
 	}
-}
-
-static inline uint32_t 
-pci_long_test_and_set_mask(uint8_t *config, uint32_t mask)
-{           
-    uint32_t val = pci_get_long(config);
-    pci_set_long(config, val | mask);
-    return val & mask;
-}
-
-static inline uint32_t
-pci_long_test_and_clear_mask(uint8_t *config, uint32_t mask) 
-{           
-    uint32_t val = pci_get_long(config);
-    pci_set_long(config, val & ~mask);
-    return val & mask;
 }
 
 void msi_notify(PCIDevice *dev, unsigned int vector)
@@ -628,6 +884,13 @@ static bool msix_masked(PCIDevice *dev)
     return dev->config[dev->msix_cap + MSIX_CONTROL_OFFSET] & MSIX_MASKALL_MASK;
 }
 
+bool msi_enabled(const PCIDevice *dev)
+{
+    return msi_present(dev) &&
+        (pci_get_word(dev->config + msi_flags_off(dev)) &
+         PCI_MSI_FLAGS_ENABLE);
+}
+
 int msix_enabled(PCIDevice *dev)
 {
     return (dev->cap_present & QEMU_PCI_CAP_MSIX) &&
@@ -643,8 +906,7 @@ static void msix_update_function_masked(PCIDevice *dev)
 static bool msix_vector_masked(PCIDevice *dev, unsigned int vector, bool fmask)
 {
     unsigned offset = vector * PCI_MSIX_ENTRY_SIZE;
-    /* MSIs on Xen can be remapped into pirqs. In those cases, masking
-     * and unmasking go through the PV evtchn path. */
+
     return fmask || dev->msix_table[offset + PCI_MSIX_ENTRY_VECTOR_CTRL] &
         PCI_MSIX_ENTRY_CTRL_MASKBIT;
 }
@@ -730,9 +992,8 @@ static void msix_handle_mask_update(PCIDevice *dev, int vector, bool was_masked)
 {
     bool is_masked = msix_is_masked(dev, vector);
 
-    if (is_masked == was_masked) {
+    if (is_masked == was_masked)
         return;
-    }
 
     msix_fire_vector_notifier(dev, vector, is_masked);
 
@@ -763,14 +1024,12 @@ void msix_write_config(PCIDevice *dev, uint32_t addr,
     pci_device_deassert_intx(dev);
 
 
-    if (dev->msix_function_masked == was_masked) {
+    if (dev->msix_function_masked == was_masked)
         return;
-    }
 
-    for (vector = 0; vector < dev->msix_entries_nr; ++vector) {
+    for (vector = 0; vector < dev->msix_entries_nr; ++vector)
         msix_handle_mask_update(dev, vector,
                                 msix_vector_masked(dev, vector, was_masked));
-    }
 }
 
 void pci_default_write_config(PCIDevice *d, uint32_t addr, uint32_t val_in, int l)
@@ -791,9 +1050,8 @@ void pci_default_write_config(PCIDevice *d, uint32_t addr, uint32_t val_in, int 
         range_covers_byte(addr, l, PCI_COMMAND))
         pci_update_mappings(d);
 
-    if (range_covers_byte(addr, l, PCI_COMMAND)) {
+    if (range_covers_byte(addr, l, PCI_COMMAND))
         pci_update_irq_disabled(d, was_irq_disabled);
-    }
 
     msi_write_config(d, addr, val_in, l);
     msix_write_config(d, addr, val_in, l);
@@ -1028,19 +1286,11 @@ static void create_piix(struct virt_pci_bus *bus)
 }
 
 
-static inline PCIDevice *pci_dev_find_by_addr(PCIBus *bus, uint32_t addr)
-{       
-    uint8_t devfn = addr >> 8;
-    
-    return bus->devices[devfn];
-}
-
 static void pci_host_config_write_common(PCIDevice *pci_dev, uint32_t addr,
                                   uint32_t limit, uint32_t val, uint32_t len)
 {
-    if (limit <= addr || pci_dev->config_write) {
+    if (limit <= addr)
         return;
-    }
 
     pci_dev->config_write(pci_dev, addr, val, MIN(len, limit - addr));
 }
@@ -1050,9 +1300,8 @@ static uint32_t pci_host_config_read_common(PCIDevice *pci_dev, uint32_t addr,
 {
     uint32_t ret;
 
-    if (limit <= addr) {
+    if (limit <= addr)
         return ~0x0;
-    }
 
     ret = pci_dev->config_read(pci_dev, addr, MIN(len, limit - addr));
 
@@ -1064,9 +1313,10 @@ static void pci_data_write(PCIBus *s, uint32_t addr, uint32_t val, int len)
     PCIDevice *pci_dev = pci_dev_find_by_addr(s, addr);
     uint32_t config_addr = addr & (PCI_CONFIG_SPACE_SIZE - 1);
     
-    if (!pci_dev) {
+    if (!pci_dev)
         return;
-    }
+
+//	printk(">>>>>%s:%d %x %x %x\n", __func__, __LINE__, addr, val, len);
     
     pci_host_config_write_common(pci_dev, config_addr, PCI_CONFIG_SPACE_SIZE,
                                  val, len);
@@ -1078,9 +1328,10 @@ static uint32_t pci_data_read(PCIBus *s, uint32_t addr, int len)
     uint32_t config_addr = addr & (PCI_CONFIG_SPACE_SIZE - 1);
     uint32_t val;
 
-    if (!pci_dev) {
+    if (!pci_dev)
         return ~0x0;
-    }
+
+//	printk(">>>>>%s:%d %x %x\n", __func__, __LINE__, addr, len);
 
     val = pci_host_config_read_common(pci_dev, config_addr,
                                       PCI_CONFIG_SPACE_SIZE, len);
@@ -1124,9 +1375,8 @@ static int vpci_conf_write(struct kvm_vcpu *vcpu, struct kvm_io_device *dev,
 {
 	struct virt_pci_bridge *bridge = container_of(dev, struct virt_pci_bridge, conf_dev);
 
-    if (len != 4) {
+    if (len != 4)
 		return -EOPNOTSUPP;
-    }
 
     bridge->conf_reg = *(uint32_t*)val;
 
@@ -1149,7 +1399,7 @@ static const struct kvm_io_device_ops vbridge_conf_ops = {
 };
 
 
-void create_pci(struct kvm_vcpu *vcpu)
+void create_vpci(struct kvm_vcpu *vcpu)
 {
 	int ret;
 	struct kvm *kvm = vcpu->kvm;

@@ -64,6 +64,9 @@
  */
 #define VHOST_SCSI_WEIGHT 256
 
+long my_vhost_dev_ioctl(struct vhost_dev *d, unsigned int ioctl, void *argp);
+long my_vhost_vring_ioctl(struct vhost_dev *d, int ioctl, void *argp);
+
 struct vhost_scsi_inflight {
 	/* Wait for the flush operation to finish */
 	struct completion comp;
@@ -1172,18 +1175,10 @@ vhost_scsi_set_endpoint(struct vhost_scsi *vs,
 	mutex_lock(&vhost_scsi_mutex);
 	mutex_lock(&vs->dev.mutex);
 
-	/* Verify that ring has been setup correctly. */
-	for (index = 0; index < vs->dev.nvqs; ++index) {
-		/* Verify that ring has been setup correctly. */
-		if (!vhost_vq_access_ok(&vs->vqs[index].vq)) {
-			ret = -EFAULT;
-			goto out;
-		}
-	}
-
 	len = sizeof(vs_tpg[0]) * VHOST_SCSI_MAX_TARGET;
 	vs_tpg = kzalloc(len, GFP_KERNEL);
 	if (!vs_tpg) {
+		printk(">>>>>>%s:%d\n",__func__,__LINE__);
 		ret = -ENOMEM;
 		goto out;
 	}
@@ -1206,6 +1201,7 @@ vhost_scsi_set_endpoint(struct vhost_scsi *vs,
 			if (vs->vs_tpg && vs->vs_tpg[tpg->tport_tpgt]) {
 				kfree(vs_tpg);
 				mutex_unlock(&tpg->tv_tpg_mutex);
+				printk(">>>>>>%s:%d\n",__func__,__LINE__);
 				ret = -EEXIST;
 				goto out;
 			}
@@ -1219,6 +1215,7 @@ vhost_scsi_set_endpoint(struct vhost_scsi *vs,
 			ret = target_depend_item(&se_tpg->tpg_group.cg_item);
 			if (ret) {
 				pr_warn("configfs_depend_item() failed: %d\n", ret);
+				printk(">>>>>>%s:%d\n",__func__,__LINE__);
 				kfree(vs_tpg);
 				mutex_unlock(&tpg->tv_tpg_mutex);
 				goto out;
@@ -1239,7 +1236,8 @@ vhost_scsi_set_endpoint(struct vhost_scsi *vs,
 			vq = &vs->vqs[i].vq;
 			mutex_lock(&vq->mutex);
 			vq->private_data = vs_tpg;
-			vhost_vq_init_access(vq);
+			if (vq->desc)
+				vhost_vq_init_access(vq);
 			mutex_unlock(&vq->mutex);
 		}
 		ret = 0;
@@ -1275,6 +1273,7 @@ vhost_scsi_clear_endpoint(struct vhost_scsi *vs,
 
 	mutex_lock(&vhost_scsi_mutex);
 	mutex_lock(&vs->dev.mutex);
+#if 0
 	/* Verify that ring has been setup correctly. */
 	for (index = 0; index < vs->dev.nvqs; ++index) {
 		if (!vhost_vq_access_ok(&vs->vqs[index].vq)) {
@@ -1282,6 +1281,7 @@ vhost_scsi_clear_endpoint(struct vhost_scsi *vs,
 			goto err_dev;
 		}
 	}
+#endif
 
 	if (!vs->vs_tpg) {
 		ret = 0;
@@ -1418,6 +1418,69 @@ err_vs:
 	return r;
 }
 
+void *my_vhost_scsi_open(void)
+{
+	struct vhost_scsi *vs;
+	struct vhost_virtqueue **vqs;
+	int r = -ENOMEM, i;
+
+	vs = kzalloc(sizeof(*vs), GFP_KERNEL | __GFP_NOWARN | __GFP_RETRY_MAYFAIL);
+	if (!vs) {
+		vs = vzalloc(sizeof(*vs));
+		if (!vs)
+			goto err_vs;
+	}
+
+	vqs = kmalloc(VHOST_SCSI_MAX_VQ * sizeof(*vqs), GFP_KERNEL);
+	if (!vqs)
+		goto err_vqs;
+
+	vhost_work_init(&vs->vs_completion_work, vhost_scsi_complete_cmd_work);
+	vhost_work_init(&vs->vs_event_work, vhost_scsi_evt_work);
+
+	vs->vs_events_nr = 0;
+	vs->vs_events_missed = false;
+
+	vqs[VHOST_SCSI_VQ_CTL] = &vs->vqs[VHOST_SCSI_VQ_CTL].vq;
+	vqs[VHOST_SCSI_VQ_EVT] = &vs->vqs[VHOST_SCSI_VQ_EVT].vq;
+	vs->vqs[VHOST_SCSI_VQ_CTL].vq.handle_kick = vhost_scsi_ctl_handle_kick;
+	vs->vqs[VHOST_SCSI_VQ_EVT].vq.handle_kick = vhost_scsi_evt_handle_kick;
+	for (i = VHOST_SCSI_VQ_IO; i < VHOST_SCSI_MAX_VQ; i++) {
+		vqs[i] = &vs->vqs[i].vq;
+		vs->vqs[i].vq.handle_kick = vhost_scsi_handle_kick;
+	}
+	vhost_dev_init(&vs->dev, vqs, VHOST_SCSI_MAX_VQ, VHOST_SCSI_WEIGHT, 0);
+
+	vhost_scsi_init_inflight(vs, NULL);
+
+	return vs;
+
+err_vqs:
+	kvfree(vs);
+err_vs:
+	return NULL;
+}
+EXPORT_SYMBOL_GPL(my_vhost_scsi_open);
+
+int my_vhost_scsi_release(void *priv)
+{
+	struct vhost_scsi *vs = priv;
+	struct vhost_scsi_target t;
+
+	mutex_lock(&vs->dev.mutex);
+	memcpy(t.vhost_wwpn, vs->vs_vhost_wwpn, sizeof(t.vhost_wwpn));
+	mutex_unlock(&vs->dev.mutex);
+	vhost_scsi_clear_endpoint(vs, &t);
+	vhost_dev_stop(&vs->dev);
+	vhost_dev_cleanup(&vs->dev, false);
+	/* Jobs can re-queue themselves in evt kick handler. Do extra flush. */
+	vhost_scsi_flush(vs);
+	kfree(vs->dev.vqs);
+	kvfree(vs);
+	return 0;
+}
+EXPORT_SYMBOL_GPL(my_vhost_scsi_release);
+
 static int vhost_scsi_release(struct inode *inode, struct file *f)
 {
 	struct vhost_scsi *vs = f->private_data;
@@ -1503,6 +1566,79 @@ vhost_scsi_ioctl(struct file *f,
 		return r;
 	}
 }
+
+long
+my_vhost_scsi_ioctl(void *opaque,
+		 unsigned int ioctl,
+		 unsigned long arg)
+{
+	struct vhost_scsi *vs = opaque;
+	void *argp = arg;
+	u64 *featurep = argp;
+	u32 *eventsp = argp;
+	u32 events_missed;
+	u64 features;
+	int r, abi_version = VHOST_SCSI_ABI_VERSION;
+	struct vhost_virtqueue *vq = &vs->vqs[VHOST_SCSI_VQ_EVT].vq;
+	struct vhost_scsi_target *backend = (struct vhost_scsi_target *)argp;
+
+	switch (ioctl) {
+	case VHOST_SCSI_SET_ENDPOINT:
+		if (backend->reserved != 0)
+			return -EOPNOTSUPP;
+
+		return vhost_scsi_set_endpoint(vs, backend);
+	case VHOST_SCSI_CLEAR_ENDPOINT:
+		if (backend->reserved != 0)
+			return -EOPNOTSUPP;
+
+		return vhost_scsi_clear_endpoint(vs, backend);
+	case VHOST_SCSI_GET_ABI_VERSION:
+		*(int*)argp = abi_version;
+		return 0;
+	case VHOST_SCSI_SET_EVENTS_MISSED:
+		events_missed = *eventsp;
+
+		mutex_lock(&vq->mutex);
+		vs->vs_events_missed = events_missed;
+		mutex_unlock(&vq->mutex);
+		return 0;
+	case VHOST_SCSI_GET_EVENTS_MISSED:
+		mutex_lock(&vq->mutex);
+		events_missed = vs->vs_events_missed;
+		mutex_unlock(&vq->mutex);
+		*eventsp = events_missed;
+		return 0;
+	case VHOST_GET_FEATURES:
+		features = VHOST_SCSI_FEATURES;
+		*featurep = features;
+		return 0;
+	case VHOST_SET_FEATURES:
+		features = *featurep;
+		return vhost_scsi_set_features(vs, features);
+	default:
+		mutex_lock(&vs->dev.mutex);
+		r = my_vhost_dev_ioctl(&vs->dev, ioctl, argp);
+		/* TODO: flush backend after dev ioctl. */
+		if (r == -ENOIOCTLCMD)
+			r = my_vhost_vring_ioctl(&vs->dev, ioctl, argp);
+		mutex_unlock(&vs->dev.mutex);
+		return r;
+	}
+}
+EXPORT_SYMBOL_GPL(my_vhost_scsi_ioctl);
+
+void my_vhost_clear_signaled(void *opaque, int vq_idx)
+{
+	struct vhost_scsi *vs = opaque;
+	struct vhost_dev *d = &vs->dev;
+	struct vhost_virtqueue *vq;
+	vq = d->vqs[vq_idx];
+
+	atomic_set(&vq->signaled, 0);
+}
+EXPORT_SYMBOL_GPL(my_vhost_clear_signaled);
+
 
 #ifdef CONFIG_COMPAT
 static long vhost_scsi_compat_ioctl(struct file *f, unsigned int ioctl,

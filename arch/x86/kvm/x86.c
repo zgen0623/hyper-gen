@@ -19,20 +19,6 @@
  *
  */
 
-#include <linux/kvm_host.h>
-#include "irq.h"
-#include "mmu.h"
-#include "i8254.h"
-#include "tss.h"
-#include "kvm_cache_regs.h"
-#include "x86.h"
-#include "cpuid.h"
-#include "pmu.h"
-#include "hyperv.h"
-#include "regs.h"
-#include "machine.h"
-
-
 #include <linux/clocksource.h>
 #include <linux/interrupt.h>
 #include <linux/kvm.h>
@@ -70,6 +56,20 @@
 #include <asm/pvclock.h>
 #include <asm/div64.h>
 #include <asm/irq_remapping.h>
+#include <linux/kvm_host.h>
+#include "irq.h"
+#include "mmu.h"
+#include "i8254.h"
+#include "tss.h"
+#include "kvm_cache_regs.h"
+#include "x86.h"
+#include "cpuid.h"
+#include "pmu.h"
+#include "hyperv.h"
+#include "regs.h"
+#include "machine.h"
+
+
 
 #define CREATE_TRACE_POINTS
 #include "trace.h"
@@ -239,6 +239,78 @@ static void kvm_on_user_return(struct user_return_notifier *urn)
 		}
 	}
 }
+
+static DEFINE_PER_CPU(struct kvm_vcpu *, my_current_vcpu);
+
+void vpci_bar_update(enum kvm_bus bus_idx,
+			       struct kvm_io_device *dev,
+					enum kvm_pci_bar_update_type type,
+					uint64_t addr, uint64_t size)
+{
+	struct kvm_pci_bar_reg_info *ptr = 
+		kzalloc(sizeof(struct kvm_pci_bar_reg_info), GFP_KERNEL);
+	if(!ptr) {
+		printk(">>>>>%s:%d\n",__func__,__LINE__);
+		return;
+	}
+
+	struct kvm_vcpu *vcpu = __this_cpu_read(my_current_vcpu);
+	if(!vcpu) {
+		printk(">>>>>%s:%d\n",__func__,__LINE__);
+		return;
+	}
+
+	printk(">>>>>%s:%d %d a=%lx l=%lx\n",__func__,__LINE__, bus_idx, addr, size);
+
+	ptr->bus_idx = bus_idx;
+	ptr->dev = dev;
+	ptr->type = type;
+	ptr->addr = addr;
+	ptr->size = size;
+
+	INIT_LIST_HEAD(&ptr->node);
+	list_add_tail(&ptr->node, &vcpu->pci_bar_update_list);
+
+	kvm_make_request(KVM_REQ_BAR_UPDATE, vcpu);
+}
+
+void handle_vpci_bar_update(struct kvm_vcpu *vcpu)
+{
+	struct kvm_io_device *dev;
+	enum kvm_pci_bar_update_type type;
+	enum kvm_bus bus_idx;
+	uint64_t addr, size;
+
+	struct list_head *entry, *tmp;
+
+	list_for_each_safe(entry, tmp, &vcpu->pci_bar_update_list) {
+		struct kvm_pci_bar_reg_info *ptr =
+			list_entry(entry, struct kvm_pci_bar_reg_info, node);
+
+		dev = ptr->dev;	
+		type = ptr->type;	
+		bus_idx = ptr->bus_idx;
+		addr = ptr->addr;
+		size = ptr->size;
+
+		mutex_lock(&vcpu->kvm->slots_lock);
+		if (type == PCI_BAR_UNREGISTER) {
+			kvm_io_bus_unregister_dev(vcpu->kvm, bus_idx, dev);
+		} else if (type == PCI_BAR_REGISTER) {
+			int ret = kvm_io_bus_register_dev(vcpu->kvm, bus_idx, addr,
+				      size, dev);
+			if (ret < 0) {
+				printk(">>>>error %s:%d\n",__func__, __LINE__);
+			}
+		}
+		mutex_unlock(&vcpu->kvm->slots_lock);
+
+		list_del(entry);
+		kfree(ptr);
+	}
+
+}
+
 
 static void shared_msr_update(unsigned slot, u32 msr)
 {
@@ -3057,6 +3129,8 @@ void kvm_arch_vcpu_load(struct kvm_vcpu *vcpu, int cpu)
 
 	kvm_x86_ops->vcpu_load(vcpu, cpu);
 
+	__this_cpu_write(my_current_vcpu, vcpu);
+
 	/* Apply any externally detected TSC adjustments (due to suspend) */
 	if (unlikely(vcpu->arch.tsc_offset_adjustment)) {
 		adjust_tsc_offset_host(vcpu, vcpu->arch.tsc_offset_adjustment);
@@ -3628,12 +3702,6 @@ int kvm_vcpu_ioctl_x86_set_xcrs(struct kvm_vcpu *vcpu,
 	return r;
 }
 
-/*
- * kvm_set_guest_paused() indicates to the guest kernel that it has been
- * stopped by the hypervisor.  This function will be called from the host only.
- * EINVAL is returned when the host attempts to set the flag for a guest that
- * does not support pv clocks.
- */
 static int kvm_set_guest_paused(struct kvm_vcpu *vcpu)
 {
 	if (!vcpu->arch.pv_time_enabled)
@@ -7176,6 +7244,7 @@ static int vcpu_enter_guest(struct kvm_vcpu *vcpu)
 		 */
 		if (kvm_check_request(KVM_REQ_HV_STIMER, vcpu))
 			kvm_hv_process_stimers(vcpu);
+
 	}
 
 	if (kvm_check_request(KVM_REQ_EVENT, vcpu) || req_int_win) {
@@ -7237,6 +7306,9 @@ static int vcpu_enter_guest(struct kvm_vcpu *vcpu)
 	vcpu->mode = IN_GUEST_MODE;
 
 	srcu_read_unlock(&vcpu->kvm->srcu, vcpu->srcu_idx);
+
+	if (kvm_check_request(KVM_REQ_BAR_UPDATE, vcpu))
+		handle_vpci_bar_update(vcpu);
 
 	/*
 	 * 1) We should set ->mode before checking ->requests.  Please see
@@ -7557,14 +7629,6 @@ int kvm_arch_vcpu_ioctl_run(struct kvm_vcpu *vcpu, struct kvm_run *kvm_run)
 			++vcpu->stat.signal_exits;
 		}
 		goto out;
-	}
-
-	/* re-sync apic's tpr */
-	if (!lapic_in_kernel(vcpu)) {
-		if (kvm_set_cr8(vcpu, kvm_run->cr8) != 0) {
-			r = -EINVAL;
-			goto out;
-		}
 	}
 
 	if (unlikely(vcpu->arch.complete_userspace_io)) {
