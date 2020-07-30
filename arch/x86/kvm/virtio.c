@@ -75,12 +75,14 @@ void vhost_dev_stop_(struct vhost_dev *hdev, VirtIODevice *vdev)
 {           
     int i;
     
+#if 0
     for (i = 0; i < hdev->nvqs; ++i) {
         vhost_virtqueue_stop(hdev,
                              vdev,
                              hdev->vqs + i,
                              hdev->vq_index + i);
     }
+#endif
 
     hdev->started = false;
     hdev->vdev = NULL;
@@ -378,10 +380,13 @@ static void virtio_queue_set_last_avail_idx(VirtIODevice *vdev, int n,
                                      unsigned int idx)
 {       
     if (virtio_vdev_has_feature(vdev, VIRTIO_F_RING_PACKED)) {
+	printk(">>>>>%s:%d \n", __func__, __LINE__);
         virtio_queue_packed_set_last_avail_idx(vdev, n, idx);
     } else {
+	printk(">>>>>%s:%d \n", __func__, __LINE__);
         virtio_queue_split_set_last_avail_idx(vdev, n, idx);
     }
+	printk(">>>>>%s:%d \n", __func__, __LINE__);
 }
 
 
@@ -401,8 +406,10 @@ static void virtio_split_packed_update_used_idx(VirtIODevice *vdev, int n)
 static void virtio_queue_update_used_idx(VirtIODevice *vdev, int n)
 {   
     if (virtio_vdev_has_feature(vdev, VIRTIO_F_RING_PACKED)) {
+	printk(">>>>>%s:%d \n", __func__, __LINE__);
         return virtio_queue_packed_update_used_idx(vdev, n);
     } else {           
+	printk(">>>>>%s:%d \n", __func__, __LINE__);
         return virtio_split_packed_update_used_idx(vdev, n);
     }                  
 }
@@ -426,15 +433,22 @@ static void vhost_virtqueue_stop(struct vhost_dev *dev,
     if (virtio_queue_get_desc_addr(vdev, idx) == 0)
         return;
 
+	printk(">>>>>%s:%d \n", __func__, __LINE__);
+
     r = my_vhost_scsi_ioctl(dev->opaque, VHOST_GET_VRING_BASE, (uint64_t)&state);
     if (r < 0) {
+	printk(">>>>>%s:%d \n", __func__, __LINE__);
         virtio_queue_restore_last_avail_idx(vdev, idx);
     } else {
+	printk(">>>>>%s:%d \n", __func__, __LINE__);
         virtio_queue_set_last_avail_idx(vdev, idx, state.num);
     }
 
+	printk(">>>>>%s:%d \n", __func__, __LINE__);
     virtio_queue_invalidate_signalled_used(vdev, idx);
+	printk(">>>>>%s:%d \n", __func__, __LINE__);
     virtio_queue_update_used_idx(vdev, idx);
+	printk(">>>>>%s:%d \n", __func__, __LINE__);
 }
 
 /* Host notifiers must be enabled at this point. */
@@ -504,28 +518,18 @@ fail_features:
     return r;
 }
 
-struct evt_node {
-	struct list_head  list;
-	VirtQueue *vq;
-};
-
 void event_notifier_set(VirtQueue *vq)
 {
 	wait_queue_head_t *head = vq->wq_head;
 
 	if (head != NULL)
     	wake_up(head);
-
-	if (vq->wq_head == NULL)
-		kfree(head);
 }
-
-struct kvm *find_kvm_by_id(uint64_t kvm_id);
 
 void vhost_alloc_notify_evt_(uint64_t evt_id,
 			struct wait_queue_entry *entry, uint64_t kvm_id)
 {
-	struct evt_node *p, *tmp;
+	struct evt_node *evt, *tmp;
 	wait_queue_head_t *head;
 	struct kvm *kvm = find_kvm_by_id(kvm_id);
 
@@ -536,64 +540,45 @@ void vhost_alloc_notify_evt_(uint64_t evt_id,
 	}
 
 	init_waitqueue_head(head);
-
 	add_wait_queue(head, entry);
 
-	mutex_lock(&kvm->evt_list_lock);
-	list_for_each_entry_safe(p, tmp, &kvm->evt_list, list) {
-		if (p->vq->evt_id == evt_id) {
-			p->vq->wq_head = head;
+	list_for_each_entry_safe(evt, tmp, &kvm->evt_list, list) {
+		if (evt->vq->evt_id == evt_id) {
+			evt->vq->wq_head = head;
 		}
 	}
-	mutex_unlock(&kvm->evt_list_lock);
-}
-
-void vhost_free_notify_evt_(uint64_t evt_id, uint64_t kvm_id)
-{
-	struct evt_node *p, *tmp;
-	struct kvm *kvm = find_kvm_by_id(kvm_id);
-
-	mutex_lock(&kvm->evt_list_lock);
-	list_for_each_entry_safe(p, tmp, &kvm->evt_list, list) {
-		if (p->vq->evt_id == evt_id) {
-			p->vq->wq_head = NULL;
-		}
-	}
-	mutex_unlock(&kvm->evt_list_lock);
 }
 
 static int virtio_set_host_notifier(VirtIODevice *vdev, int n, bool assign)
 {
 	struct kvm *kvm = vdev->pci_dev.bus->kvm;
-    static uint64_t evt_id;
-	struct evt_node *p, *tmp;
+    static uint64_t evt_id = 1;
+	struct evt_node *evt, *tmp;
     VirtQueue *vq = virtio_get_queue(vdev, n);
 
     if (assign) { 
     	vq->evt_id = evt_id++;
 
-		p = kzalloc(sizeof(*p), GFP_KERNEL);
-		if (!p)
+		evt = kzalloc(sizeof(*evt), GFP_KERNEL);
+		if (!evt)
 			return -ENOMEM;
 
-		p->vq = vq;
+		evt->vq = vq;
+		INIT_LIST_HEAD(&evt->list);
 
-		INIT_LIST_HEAD(&p->list);
-
-		mutex_lock(&kvm->evt_list_lock);
-		list_add_tail(&p->list, &kvm->evt_list);
-		mutex_unlock(&kvm->evt_list_lock);
+		list_add(&evt->list, &kvm->evt_list);
     } else {                             
-		mutex_lock(&kvm->evt_list_lock);
-		list_for_each_entry_safe(p, tmp, &kvm->evt_list, list) {
-			if (p->vq == vq) {
-				list_del(&p->list);
+		list_for_each_entry_safe(evt, tmp, &kvm->evt_list, list) {
+			if (evt->vq->evt_id == vq->evt_id) {
+				wait_queue_head_t *head = vq->wq_head;
 				vq->wq_head = NULL;
-				kfree(p);
+				kfree(head);
+
+				list_del(&evt->list);
+				kfree(evt);
 			}
 		}
-		mutex_unlock(&kvm->evt_list_lock);
-    }       
+    }
         
 	vq->host_notifier_enabled = assign;
     
@@ -1131,8 +1116,13 @@ void virtio_init(VirtIODevice *vdev, const char *name,
     } else {
         vdev->config = NULL;
     }
+}
 
-//    vdev->vmstate = qemu_add_vm_change_state_handler_prio(virtio_vmstate_change, vdev, 0);
+void virtio_cleanup_(VirtIODevice *vdev)
+{
+    kfree(vdev->config);
+    kfree(vdev->vector_queues);
+    kfree(vdev->vq);
 }
 
 
@@ -1423,7 +1413,7 @@ static void virtio_set_started(VirtIODevice *vdev, bool started)
         vdev->start_on_kick = false;
 }
 
-static int virtio_set_status(VirtIODevice *vdev, uint8_t val)
+int virtio_set_status(VirtIODevice *vdev, uint8_t val)
 {
     if (virtio_vdev_has_feature(vdev, VIRTIO_F_VERSION_1)) {
         if (!(vdev->status & VIRTIO_CONFIG_S_FEATURES_OK) &&
@@ -2322,4 +2312,5 @@ void virtio_device_realize(VirtIODevice *vdev)
 
     virtio_pci_device_plugged(vdev);
 }
+
 

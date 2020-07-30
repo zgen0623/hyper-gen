@@ -164,15 +164,15 @@ struct VirtQueue
     bool host_notifier_enabled;
 	VirtIOPCIQueue vq_config_buf;
 
-	volatile wait_queue_head_t *wq_head;
+	wait_queue_head_t *wq_head;
     QLIST_ENTRY(VirtQueue) node;
 };
 
 struct VirtIODevice
 {
     PCIDevice pci_dev;
-    const char *name;
     uint8_t status;
+	char *name;
     atomic_t isr_val;
     uint16_t queue_sel;
 
@@ -190,7 +190,6 @@ struct VirtIODevice
     bool vm_running;
     bool broken; /* device in invalid state, needs reset */
     bool start_on_kick; /* when virtio 1.0 feature has not been negotiated */
-  //  VMChangeStateEntry *vmstate;
 	QLIST_HEAD(, VirtQueue) *vector_queues;
 
     uint32_t pci_guest_features[2];
@@ -204,9 +203,6 @@ struct VirtIODevice
     uint32_t legacy_io_bar_idx;
     uint32_t msix_bar_idx;
     uint32_t modern_mem_bar_idx;
-//    MemoryRegion bar;
- //   MemoryRegion modern_bar;
-  //  MemoryRegion io_bar;
     union {
         struct {
             VirtIOPCIRegion common;
@@ -318,6 +314,10 @@ typedef struct VRingUsed
     VRingUsedElem ring[0];
 } VRingUsed;
 
+struct evt_node {
+	struct list_head  list;
+	VirtQueue *vq;
+};
 
 uint64_t vhost_get_features(struct vhost_dev *hdev, const int *feature_bits,
                             uint64_t features);
@@ -430,4 +430,9 @@ void vhost_virtqueue_mask(struct vhost_dev *hdev, VirtIODevice *vdev, int n, boo
 void vhost_dev_disable_notifiers(struct vhost_dev *hdev, VirtIODevice *vdev);
 void vhost_dev_stop_(struct vhost_dev *hdev, VirtIODevice *vdev);
 void virtio_pci_reset(VirtIODevice *vdev);
+struct kvm *find_kvm_by_id(uint64_t kvm_id);
+int virtio_set_status(VirtIODevice *vdev, uint8_t val);
+
+void virtio_cleanup_(VirtIODevice *vdev);
+
 #endif

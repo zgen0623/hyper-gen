@@ -139,9 +139,6 @@ struct virt_pci_device {
     int msix_entries_nr;
     uint8_t *msix_table;
     uint8_t *msix_pba;
-//    MemoryRegion msix_exclusive_bar;
- //   MemoryRegion msix_table_mmio;
-  //  MemoryRegion msix_pba_mmio;
     unsigned *msix_entry_used;
     bool msix_function_masked;
     uint8_t msi_cap;
@@ -164,6 +161,7 @@ struct virt_pci_bus {
     void *irq_opaque;
     int *irq_count;
 	struct kvm *kvm;
+    struct piix *piix;
 };
 
 struct virt_pci_bridge {
@@ -203,7 +201,8 @@ struct piix{
 
 bool msix_is_masked(PCIDevice *dev, unsigned int vector);
 void msix_set_pending(PCIDevice *dev, unsigned int vector);
-void create_vpci(struct kvm_vcpu *vcpu);
+void create_vpci(struct kvm *kvm);
+void destroy_vpci(struct kvm *kvm);
 int pci_add_capability(PCIDevice *pdev, uint8_t cap_id,
                        uint8_t offset, uint8_t size);
 
@@ -436,4 +435,7 @@ void pci_register_bar(PCIDevice *pci_dev, int bar_num,
                       uint8_t type, pcibus_t size,
 					struct kvm_io_device_ops *ops,
 					enum kvm_bus bus_idx);
+
+void do_pci_unregister_device(PCIDevice *pci_dev);
+void destroy_vpci(struct kvm *kvm);
 #endif

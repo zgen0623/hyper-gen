@@ -316,10 +316,25 @@ static void vhost_scsi_realize(VirtIODevice *vdev)
     return;
 }
 
-
-void create_vblk(struct kvm_vcpu *vcpu)
+static void vhost_scsi_unrealize(VirtIODevice *vdev)
 {
-	struct kvm *kvm = vcpu->kvm;
+	int i;
+    VHostSCSI *vs = (VHostSCSI *)vdev;
+
+	virtio_set_status(vdev, 0);
+
+	for (i = 0; i < VHOST_SCSI_VQ_NUM_FIXED + vs->conf.num_queues; i++)
+		virtio_del_queue(vdev, i);
+
+	virtio_cleanup_(vdev);
+
+    kfree(vs->dev.vqs);
+    my_vhost_scsi_release(vs->dev.opaque);
+}
+
+
+void create_vblk(struct kvm *kvm)
+{
 	struct virt_pci_bridge *bridge = kvm->vdevices.vbridge;
 	struct virt_pci_bus *bus = bridge->bus;
 	PCIDevice *pci_dev;
@@ -383,5 +398,27 @@ void create_vblk(struct kvm_vcpu *vcpu)
 
     //reset
     virtio_pci_reset(vdev);
+
+	kvm->vdevices.vblock = vs;
+}
+
+void destroy_vblk(struct kvm *kvm)
+{
+	PCIDevice *pci_dev;
+    VirtIODevice *vdev;
+    VHostSCSI *vs;
+
+	vs = kvm->vdevices.vblock;
+	vdev = &vs->parent_obj;
+	pci_dev = &vdev->pci_dev;
+
+	//1. destroy pci
+	//2. destroy vdev
+	//3. destroy vs
+    do_pci_unregister_device(pci_dev);
+
+    vhost_scsi_unrealize(vdev);
+
+	kfree(vs);
 }
 

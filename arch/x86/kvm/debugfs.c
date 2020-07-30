@@ -12,7 +12,7 @@
 
 bool kvm_arch_has_vcpu_debugfs(void)
 {
-	return true;
+	return false;
 }
 
 static int vcpu_get_tsc_offset(void *data, u64 *val)

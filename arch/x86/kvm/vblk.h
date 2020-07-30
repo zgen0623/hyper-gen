@@ -48,7 +48,8 @@ typedef struct VHostSCSI {
     uint32_t cdb_size;
 } VHostSCSI; 
 
-void create_vblk(struct kvm_vcpu *vcpu);
+void create_vblk(struct kvm *kvm);
+void detroy_vblk(struct kvm *kvm);
 MSIMessage msix_get_message(PCIDevice *dev, unsigned vector);
 
 bool msi_enabled(const PCIDevice *dev);
@@ -56,6 +57,7 @@ bool msi_enabled(const PCIDevice *dev);
 MSIMessage msi_get_message(PCIDevice *dev, unsigned int vector);
 
 bool msix_is_masked(PCIDevice *dev, unsigned int vector);
+void destroy_vblk(struct kvm *kvm);
 
 
 

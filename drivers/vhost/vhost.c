@@ -37,8 +37,6 @@
 void __must_check vhost_inject_virq_kvm(uint64_t kvm_id, void *irq_priv);
 void * __must_check vhost_alloc_irq_entry_kvm(uint64_t kvm_id, int virq);
 
-void __must_check vhost_wait_notify_evt(void *priv);
-void __must_check vhost_free_notify_evt_(uint64_t evt_id, uint64_t kvm_id);
 void __must_check vhost_alloc_notify_evt_(uint64_t evt_id,
 				struct wait_queue_entry *entry, uint64_t kvm_id);
 
@@ -245,12 +243,6 @@ void vhost_poll_stop(struct vhost_poll *poll)
 	}
 }
 EXPORT_SYMBOL_GPL(vhost_poll_stop);
-
-
-static void my_vhost_poll_stop(struct vhost_virtqueue *vq)
-{
-	vhost_free_notify_evt_(vq->evt_id, vq->kvm_id);
-}
 
 void vhost_work_flush(struct vhost_dev *dev, struct vhost_work *work)
 {
@@ -603,7 +595,6 @@ void vhost_dev_stop(struct vhost_dev *dev)
 
 	for (i = 0; i < dev->nvqs; ++i) {
 		if (dev->vqs[i]->notify_status > 0 && dev->vqs[i]->handle_kick) {
-			my_vhost_poll_stop(dev->vqs[i]);
 			vhost_poll_flush(&dev->vqs[i]->poll);
 		}
 	}
@@ -1444,9 +1435,6 @@ long vhost_vring_ioctl(struct vhost_dev *d, int ioctl, void __user *argp)
 			}
 		}
 
-		if (pollstop && vq->handle_kick)
-			my_vhost_poll_stop(vq);
-
 #if 0
 		printk(">>>>>>%s:%d [%d] %d %d evt=%d %p %d\n",__func__, __LINE__,
 			idx, f.fd, vq->notify_status, f.evt_id, vq->handle_kick, pollstart);
@@ -1623,9 +1611,6 @@ long my_vhost_vring_ioctl(struct vhost_dev *d, int ioctl, void *argp)
 				pollstart = true;
 			}
 		}
-
-		if (pollstop && vq->handle_kick)
-			my_vhost_poll_stop(vq);
 
 		vq->notify_status = f->fd;
 		vq->evt_id = f->evt_id;

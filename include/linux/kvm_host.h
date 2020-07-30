@@ -524,7 +524,6 @@ struct kvm {
 	struct kvm_irq_routing *irq_routes;
 	long unsigned *used_gsi_bitmap;
 	int ent_allocated;
-	struct mutex evt_list_lock;
 	struct list_head evt_list;
 };
 

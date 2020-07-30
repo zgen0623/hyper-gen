@@ -563,7 +563,7 @@ static int pci_init_multifunction(PCIBus *bus, PCIDevice *dev)
 	return 0;
 }
 
-static void pci_config_free(PCIDevice *pci_dev)
+static void pci_config_free_(PCIDevice *pci_dev)
 {
     kfree(pci_dev->config);
     kfree(pci_dev->cmask);
@@ -572,10 +572,29 @@ static void pci_config_free(PCIDevice *pci_dev)
     kfree(pci_dev->used);
 }
 
-static void do_pci_unregister_device(PCIDevice *pci_dev)
+void do_pci_unregister_device(PCIDevice *pci_dev)
 {
+	int i;
+    PCIIORegion *r;
+	struct kvm *kvm = pci_dev->bus->kvm;
+
+    for(i = 0; i < PCI_NUM_REGIONS; i++) {
+        r = &pci_dev->io_regions[i];
+        /* this region isn't registered */
+        if (!r->size)
+            continue;
+
+		mutex_lock(&kvm->slots_lock);
+		kvm_io_bus_unregister_dev(kvm, r->bus_idx, &r->dev);
+		mutex_unlock(&kvm->slots_lock);
+    }
+
+    kfree(pci_dev->msix_table);
+    kfree(pci_dev->msix_pba);
+    kfree(pci_dev->msix_entry_used);
+
     pci_dev->bus->devices[pci_dev->devfn] = NULL;
-    pci_config_free(pci_dev);
+    pci_config_free_(pci_dev);
 }
 
 uint32_t pci_default_read_config(PCIDevice *d,
@@ -1283,6 +1302,22 @@ static void create_piix(struct virt_pci_bus *bus)
 
 	pci_bus_irqs(pci_dev->bus, piix3_set_irq, pci_slot_get_pirq,
                     pci_dev, PIIX_NUM_PIRQS);
+
+	bus->piix = piix;
+}
+
+static void destroy_piix(struct virt_pci_bus *bus)
+{
+    struct piix *piix;
+	PCIDevice *pci_dev;
+
+	piix = bus->piix;
+	pci_dev = &piix->pci;
+
+    do_pci_unregister_device(pci_dev);
+
+    kfree(bus->irq_count);
+	kfree(piix);
 }
 
 
@@ -1399,10 +1434,9 @@ static const struct kvm_io_device_ops vbridge_conf_ops = {
 };
 
 
-void create_vpci(struct kvm_vcpu *vcpu)
+void create_vpci(struct kvm *kvm)
 {
 	int ret;
-	struct kvm *kvm = vcpu->kvm;
 	struct virt_pci_bridge *bridge;
 	struct virt_pci_bus *bus;
 	
@@ -1411,7 +1445,6 @@ void create_vpci(struct kvm_vcpu *vcpu)
 		printk(">>>>>error %s:%d\n", __func__, __LINE__);
 		return;
 	}
-	bus->kvm = kvm;
 	
 	bridge = kzalloc(sizeof(struct virt_pci_bridge), GFP_KERNEL);
 	if (!bridge) {
@@ -1440,6 +1473,7 @@ void create_vpci(struct kvm_vcpu *vcpu)
 	mutex_unlock(&kvm->slots_lock);
 
 	kvm->vdevices.vbridge = bridge;
+	bus->kvm = kvm;
 
 	create_piix(bus);
 
@@ -1457,6 +1491,24 @@ fail_1:
 }
 
 
+void destroy_vpci(struct kvm *kvm)
+{
+	struct virt_pci_bridge *bridge;
+	struct virt_pci_bus *bus;
+
+	bridge = kvm->vdevices.vbridge;
+	bus = bridge->bus;
+
+	destroy_piix(bus);
+
+	mutex_lock(&kvm->slots_lock);
+	kvm_io_bus_unregister_dev(kvm, KVM_PIO_BUS, &bridge->data_dev);
+	kvm_io_bus_unregister_dev(kvm, KVM_PIO_BUS, &bridge->conf_dev);
+	mutex_unlock(&kvm->slots_lock);
+
+	kfree(bridge);
+	kfree(bus);
+}
 
 
 

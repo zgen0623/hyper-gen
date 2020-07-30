@@ -792,8 +792,11 @@ static int kvm_vm_release(struct inode *inode, struct file *filp)
 {
 	struct kvm *kvm = filp->private_data;
 
+
 	kvm_irqfd_release(kvm);
 
+	int r = refcount_read(&kvm->users_count);
+	printk(">>>>>%s:%d put reg=%d\n", __func__, __LINE__,r);
 	kvm_put_kvm(kvm);
 	return 0;
 }
@@ -2601,8 +2604,10 @@ static int kvm_vcpu_release(struct inode *inode, struct file *filp)
 {
 	struct kvm_vcpu *vcpu = filp->private_data;
 
-	debugfs_remove_recursive(vcpu->debugfs_dentry);
-	kvm_put_kvm(vcpu->kvm);
+	printk(">>>>>%s:%d put \n", __func__, __LINE__);
+
+//	debugfs_remove_recursive(vcpu->debugfs_dentry);
+//	kvm_put_kvm(vcpu->kvm);
 	return 0;
 }
 
@@ -2682,9 +2687,11 @@ static int kvm_vm_ioctl_create_vcpu(struct kvm *kvm, u32 id)
 	if (r)
 		goto vcpu_destroy;
 
+#if 1
 	r = kvm_create_vcpu_debugfs(vcpu);
 	if (r)
 		goto vcpu_destroy;
+#endif
 
 	mutex_lock(&kvm->lock);
 	if (kvm_get_vcpu_by_id(kvm, id)) {
@@ -2694,10 +2701,12 @@ static int kvm_vm_ioctl_create_vcpu(struct kvm *kvm, u32 id)
 
 	BUG_ON(kvm->vcpus[atomic_read(&kvm->online_vcpus)]);
 
+	printk(">>>>>%s:%d get \n", __func__, __LINE__);
 	/* Now it's all set up, let userspace reach it */
-	kvm_get_kvm(kvm);
+//	kvm_get_kvm(kvm);
 	r = create_vcpu_fd(vcpu);
 	if (r < 0) {
+		printk(">>>>>%s:%d put \n", __func__, __LINE__);
 		kvm_put_kvm(kvm);
 		goto unlock_vcpu_destroy;
 	}
@@ -3038,6 +3047,7 @@ static int kvm_device_release(struct inode *inode, struct file *filp)
 	struct kvm_device *dev = filp->private_data;
 	struct kvm *kvm = dev->kvm;
 
+	printk(">>>>>%s:%d put \n", __func__, __LINE__);
 	kvm_put_kvm(kvm);
 	return 0;
 }
@@ -3123,9 +3133,11 @@ static int kvm_ioctl_create_device(struct kvm *kvm,
 	if (ops->init)
 		ops->init(dev);
 
+	printk(">>>>>%s:%d get \n", __func__, __LINE__);
 	kvm_get_kvm(kvm);
 	ret = anon_inode_getfd(ops->name, &kvm_device_fops, dev, O_RDWR | O_CLOEXEC);
 	if (ret < 0) {
+		printk(">>>>>%s:%d put \n", __func__, __LINE__);
 		kvm_put_kvm(kvm);
 		mutex_lock(&kvm->lock);
 		list_del(&dev->vm_node);
@@ -3380,12 +3392,14 @@ static int kvm_dev_ioctl_create_vm(unsigned long type)
 		return PTR_ERR(kvm);
 	r = get_unused_fd_flags(O_CLOEXEC);
 	if (r < 0) {
+		printk(">>>>>%s:%d put \n", __func__, __LINE__);
 		kvm_put_kvm(kvm);
 		return r;
 	}
 	file = anon_inode_getfile("kvm-vm", &kvm_vm_fops, kvm, O_RDWR);
 	if (IS_ERR(file)) {
 		put_unused_fd(r);
+		printk(">>>>>%s:%d put \n", __func__, __LINE__);
 		kvm_put_kvm(kvm);
 		return PTR_ERR(file);
 	}

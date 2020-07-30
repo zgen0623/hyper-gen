@@ -600,37 +600,16 @@ static void kvm_irqchip_add_irq_route(struct kvm *kvm,
     e.u.irqchip.pin = pin;
 
     kvm_add_routing_entry(kvm, &e);
-//	routing->entries[routing->nr] = e;
-//	routing->nr++;
-
-//	set_gsi(, e.gsi);
 }
 
 static void kvm_pc_setup_irq_routing(struct kvm *kvm)
 {   
     int i;
 	int r;
-#if 0
-	struct kvm_irq_routing *routing;
-	struct kvm_irq_routing_entry *entries = NULL;
-	int ent_nr = 7 + 8 + 23;
-#endif
-
 	kvm->used_gsi_bitmap = bitmap_new(GSI_COUNT);
 	kvm->irq_routes = kzalloc(sizeof(struct kvm_irq_routing), GFP_KERNEL);
 	kvm->ent_allocated = 0;
 
-#if 0
-	routing = kzalloc(sizeof(*routing) + ent_nr * sizeof(*entries), GFP_KERNEL);
-	if (!routing) {
-		printk(">>>>>fail to irq routing %s:%d\n", __func__, __LINE__);
-		return;
-	}
-
-	kvm->ent_allocated = ent_nr;
-	routing->nr = 0;
-#endif
-        
     for (i = 0; i < 8; ++i) {
         if (i == 2) {
             continue;
@@ -655,12 +634,15 @@ static void kvm_pc_setup_irq_routing(struct kvm *kvm)
 		printk(">>>>>fail to irq routing %s:%d\n", __func__, __LINE__);
 	}
 
-	//kvm->irq_routes = routing;
-
 	return;
 }
 
-static void create_vnet(struct kvm_vcpu *vcpu)
+
+static void create_vnet(struct kvm *kvm)
+{
+
+}
+static void destroy_vnet(struct kvm *kvm)
 {
 
 }
@@ -681,9 +663,9 @@ void init_virt_machine(struct kvm_vcpu *vcpu)
 	
 	build_bootparams_mini(vcpu);
 
-	create_vpci(vcpu);
-	create_vblk(vcpu);
-	create_vnet(vcpu);
+	create_vpci(vcpu->kvm);
+	create_vblk(vcpu->kvm);
+	create_vnet(vcpu->kvm);
 }
 
 int create_virt_machine(struct kvm *kvm)
@@ -738,7 +720,6 @@ int create_virt_machine(struct kvm *kvm)
 
 	kvm_pc_setup_irq_routing(kvm);
 
-	mutex_init(&kvm->evt_list_lock);
 	INIT_LIST_HEAD(&kvm->evt_list);
 
 create_irqchip_unlock:
@@ -749,5 +730,13 @@ create_irqchip_unlock:
 void destroy_virt_machine(struct kvm *kvm)
 {
 	vfree(kvm->possible_cpus);
+
+	destroy_vblk(kvm);
+	destroy_vnet(kvm);
+	destroy_vpci(kvm);
+
+	kfree(kvm->irq_routes);
+	kfree(kvm->used_gsi_bitmap);
+	printk(">>>>>%s:%d\n", __func__, __LINE__);
 }
 
