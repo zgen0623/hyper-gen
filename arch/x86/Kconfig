@@ -2702,8 +2702,6 @@ config EISA
 
 	  Otherwise, say N.
 
-source "drivers/eisa/Kconfig"
-
 config SCx200
 	tristate "NatSemi SCx200 support"
 	---help---
@@ -2816,8 +2814,6 @@ endif # X86_32
 config AMD_NB
 	def_bool y
 	depends on CPU_SUP_AMD && PCI
-
-source "drivers/pcmcia/Kconfig"
 
 config RAPIDIO
 	tristate "RapidIO support"

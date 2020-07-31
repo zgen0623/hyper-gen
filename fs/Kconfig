@@ -8,6 +8,9 @@ menu "File systems"
 config DCACHE_WORD_ACCESS
        bool
 
+
+
+
 if BLOCK
 
 config FS_IOMAP
@@ -67,6 +70,10 @@ config FS_DAX_LIMITED
 
 endif # BLOCK
 
+
+
+
+
 # Posix ACL utility routines
 #
 # Note: Posix ACLs can be implemented without these helpers.  Never use
@@ -112,12 +119,18 @@ source "fs/autofs4/Kconfig"
 source "fs/fuse/Kconfig"
 source "fs/overlayfs/Kconfig"
 
+
+
+
+
 menu "Caches"
 
 source "fs/fscache/Kconfig"
 source "fs/cachefiles/Kconfig"
 
 endmenu
+
+
 
 if BLOCK
 menu "CD-ROM/DVD Filesystems"
@@ -128,6 +141,9 @@ source "fs/udf/Kconfig"
 endmenu
 endif # BLOCK
 
+
+
+
 if BLOCK
 menu "DOS/FAT/NT Filesystems"
 
@@ -136,6 +152,10 @@ source "fs/ntfs/Kconfig"
 
 endmenu
 endif # BLOCK
+
+
+
+
 
 menu "Pseudo filesystems"
 
@@ -215,6 +235,10 @@ source "fs/efivarfs/Kconfig"
 
 endmenu
 
+
+
+
+
 menuconfig MISC_FILESYSTEMS
 	bool "Miscellaneous filesystems"
 	default y
@@ -259,7 +283,16 @@ source "fs/aufs/Kconfig"
 
 endif # MISC_FILESYSTEMS
 
+
+
+
+
+
 source "fs/exofs/Kconfig.ore"
+
+
+
+
 
 menuconfig NETWORK_FILESYSTEMS
 	bool "Network File Systems"
@@ -274,6 +307,9 @@ menuconfig NETWORK_FILESYSTEMS
 
 	  If you say N, all options in this submenu will be skipped and
 	  disabled; if unsure, say Y here.
+
+
+
 
 if NETWORK_FILESYSTEMS
 
@@ -304,14 +340,16 @@ config NFS_COMMON
 	default y
 
 source "net/sunrpc/Kconfig"
-source "fs/ceph/Kconfig"
 source "fs/cifs/Kconfig"
 source "fs/ncpfs/Kconfig"
 source "fs/coda/Kconfig"
 source "fs/afs/Kconfig"
-source "fs/9p/Kconfig"
 
 endif # NETWORK_FILESYSTEMS
+
+
+
+
 
 source "fs/nls/Kconfig"
 source "fs/dlm/Kconfig"

@@ -573,8 +573,6 @@ config DEVPORT
 	  Say Y here if you want to support the /dev/port device. The /dev/port
 	  device is similar to /dev/mem, but for I/O ports.
 
-source "drivers/s390/char/Kconfig"
-
 config TILE_SROM
 	tristate "Character-device access via hypervisor to the Tilera SPI ROM"
 	depends on TILE
