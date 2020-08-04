@@ -37,8 +37,9 @@
 void __must_check vhost_inject_virq_kvm(uint64_t kvm_id, void *irq_priv);
 void * __must_check vhost_alloc_irq_entry_kvm(uint64_t kvm_id, int virq);
 
-void __must_check vhost_alloc_notify_evt_(uint64_t evt_id,
+void * __must_check vhost_alloc_notify_evt_(uint64_t evt_id,
 				struct wait_queue_entry *entry, uint64_t kvm_id);
+void vhost_free_notify_evt_(uint64_t evt_id, uint64_t kvm_id);
 
 
 static ushort max_mem_regions = 64;
@@ -230,7 +231,7 @@ EXPORT_SYMBOL_GPL(vhost_poll_start);
 
 static void my_vhost_poll_start(struct vhost_poll *poll, struct vhost_virtqueue *vq)
 {
-	vhost_alloc_notify_evt_(vq->evt_id, &poll->wait, vq->kvm_id);
+	vq->notify_priv = vhost_alloc_notify_evt_(vq->evt_id, &poll->wait, vq->kvm_id);
 }
 
 /* Stop polling a file. After this function returns, it becomes safe to drop the
@@ -243,6 +244,15 @@ void vhost_poll_stop(struct vhost_poll *poll)
 	}
 }
 EXPORT_SYMBOL_GPL(vhost_poll_stop);
+
+static void my_vhost_poll_stop(struct vhost_virtqueue *vq)
+{
+	printk("%s:%d\n", __func__, __LINE__);
+//	vhost_free_notify_evt_(vq->evt_id, vq->kvm_id);
+	vq->notify_status = -1;
+	kfree(vq->notify_priv);
+	vq->notify_priv = NULL;
+}
 
 void vhost_work_flush(struct vhost_dev *dev, struct vhost_work *work)
 {
@@ -316,6 +326,8 @@ static void vhost_vq_reset(struct vhost_dev *dev,
 {
 	vq->notify_status = -1;
 	vq->signal_type = -1;
+	vq->irq_priv = NULL;
+	vq->notify_priv = NULL;
 
 	vq->num = 1;
 	vq->desc = NULL;
@@ -595,6 +607,7 @@ void vhost_dev_stop(struct vhost_dev *dev)
 
 	for (i = 0; i < dev->nvqs; ++i) {
 		if (dev->vqs[i]->notify_status > 0 && dev->vqs[i]->handle_kick) {
+			my_vhost_poll_stop(dev->vqs[i]);
 			vhost_poll_flush(&dev->vqs[i]->poll);
 		}
 	}
@@ -648,6 +661,8 @@ void vhost_dev_cleanup(struct vhost_dev *dev, bool locked)
 	int i;
 
 	for (i = 0; i < dev->nvqs; ++i) {
+		if (dev->vqs[i]->notify_status > 0) 
+			my_vhost_poll_stop(dev->vqs[i]);
 		if (dev->vqs[i]->error_ctx)
 			eventfd_ctx_put(dev->vqs[i]->error_ctx);
 		if (dev->vqs[i]->error)
@@ -656,7 +671,10 @@ void vhost_dev_cleanup(struct vhost_dev *dev, bool locked)
 			eventfd_ctx_put(dev->vqs[i]->call_ctx);
 		if (dev->vqs[i]->call)
 			fput(dev->vqs[i]->call);
-		kfree(dev->vqs[i]->irq_priv);
+
+		if (dev->vqs[i]->irq_priv != NULL)
+			kfree(dev->vqs[i]->irq_priv);
+
 		vhost_vq_reset(dev, dev->vqs[i]);
 	}
 	vhost_dev_free_iovecs(dev);
@@ -1456,11 +1474,15 @@ long vhost_vring_ioctl(struct vhost_dev *d, int ioctl, void __user *argp)
 			break;
 		}
 		if (vq->signal_type != f.fd) {
-			vq->signal_type = f.fd;
 			if (f.fd == 2) {
 				vq->kvm_id = f.kvm_id;
 				vq->irq_priv = vhost_alloc_irq_entry_kvm(f.kvm_id, f.virq);
+			} else if (vq->signal_type == 2){
+				kfree(vq->irq_priv);
+				vq->irq_priv = NULL;
 			}
+
+			vq->signal_type = f.fd;
 		} else if (vq->signal_type == 2) {
 			vq->kvm_id = f.kvm_id;
 			kfree(vq->irq_priv);
@@ -1611,6 +1633,9 @@ long my_vhost_vring_ioctl(struct vhost_dev *d, int ioctl, void *argp)
 				pollstart = true;
 			}
 		}
+
+		if (pollstop && vq->handle_kick)
+			my_vhost_poll_stop(vq);
 
 		vq->notify_status = f->fd;
 		vq->evt_id = f->evt_id;

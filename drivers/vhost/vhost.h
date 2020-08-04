@@ -108,6 +108,7 @@ struct vhost_virtqueue {
 	void *irq_priv;
 	uint64_t kvm_id;
 	uint64_t evt_id;
+	void *notify_priv;
 
 	struct vhost_poll poll;
 

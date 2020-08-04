@@ -526,7 +526,7 @@ void event_notifier_set(VirtQueue *vq)
     	wake_up(head);
 }
 
-void vhost_alloc_notify_evt_(uint64_t evt_id,
+void *vhost_alloc_notify_evt_(uint64_t evt_id,
 			struct wait_queue_entry *entry, uint64_t kvm_id)
 {
 	struct evt_node *evt, *tmp;
@@ -547,6 +547,8 @@ void vhost_alloc_notify_evt_(uint64_t evt_id,
 			evt->vq->wq_head = head;
 		}
 	}
+
+	return head;
 }
 
 static int virtio_set_host_notifier(VirtIODevice *vdev, int n, bool assign)
@@ -570,9 +572,7 @@ static int virtio_set_host_notifier(VirtIODevice *vdev, int n, bool assign)
     } else {                             
 		list_for_each_entry_safe(evt, tmp, &kvm->evt_list, list) {
 			if (evt->vq->evt_id == vq->evt_id) {
-				wait_queue_head_t *head = vq->wq_head;
 				vq->wq_head = NULL;
-				kfree(head);
 
 				list_del(&evt->list);
 				kfree(evt);
