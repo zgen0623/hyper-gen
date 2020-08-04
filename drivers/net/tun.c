@@ -784,6 +784,70 @@ out:
 	return err;
 }
 
+static int my_tun_attach(struct tun_struct *tun, struct tun_file *tfile,
+		      bool skip_filter, bool napi, bool napi_frags,
+		      bool publish_tun)
+{
+	struct net_device *dev = tun->dev;
+	int err;
+
+	err = -EINVAL;
+	if (rtnl_dereference(tfile->tun) && !tfile->detached)
+		goto out;
+
+	err = -EBUSY;
+	if (!(tun->flags & IFF_MULTI_QUEUE) && tun->numqueues == 1)
+		goto out;
+
+	err = -E2BIG;
+	if (!tfile->detached &&
+	    tun->numqueues + tun->numdisabled == MAX_TAP_QUEUES)
+		goto out;
+
+	err = 0;
+
+	/* Re-attach the filter to persist device */
+	if (!skip_filter && (tun->filter_attached == true)) {
+		lock_sock(tfile->socket.sk);
+		err = sk_attach_filter(&tun->fprog, tfile->socket.sk);
+		release_sock(tfile->socket.sk);
+		if (!err)
+			goto out;
+	}
+
+	if (!tfile->detached &&
+	    skb_array_resize(&tfile->tx_array, dev->tx_queue_len, GFP_KERNEL)) {
+		err = -ENOMEM;
+		goto out;
+	}
+
+	tfile->queue_index = tun->numqueues;
+	tfile->socket.sk->sk_shutdown &= ~RCV_SHUTDOWN;
+	if (tfile->detached) {
+		tun_enable_queue(tfile);
+	} else {
+		sock_hold(&tfile->sk);
+		tun_napi_init(tun, tfile, napi, napi_frags);
+	}
+
+	/* device is allowed to go away first, so no need to hold extra
+	 * refcnt.
+	 */
+
+	/* Publish tfile->tun and tun->tfiles only after we've fully
+	 * initialized tfile; otherwise we risk using half-initialized
+	 * object.
+	 */
+	if (publish_tun)
+		rcu_assign_pointer(tfile->tun, tun);
+
+	rcu_assign_pointer(tun->tfiles[tun->numqueues], tfile);
+	tun->numqueues++;
+	tun_set_real_num_queues(tun);
+out:
+	return err;
+}
+
 static struct tun_struct *tun_get(struct tun_file *tfile)
 {
 	struct tun_struct *tun;
@@ -2554,6 +2618,308 @@ unlock:
 	return ret;
 }
 
+static int my_tun_set_iff(struct net *net, struct tun_file *tfile, struct ifreq *ifr)
+{
+	struct tun_struct *tun;
+	struct net_device *dev;
+	int err;
+	struct net_device *bridge;
+	const struct net_device_ops *ops;
+	struct netlink_ext_ack extack;
+
+	if (tfile->detached)
+		return -EINVAL;
+
+	if ((ifr->ifr_flags & IFF_NAPI_FRAGS)) {
+		if (!capable(CAP_NET_ADMIN))
+			return -EPERM;
+
+		if (!(ifr->ifr_flags & IFF_NAPI) ||
+		    (ifr->ifr_flags & TUN_TYPE_MASK) != IFF_TAP)
+			return -EINVAL;
+	}
+
+	dev = __dev_get_by_name(net, ifr->ifr_name);
+	if (dev) {
+		if (ifr->ifr_flags & IFF_TUN_EXCL)
+			return -EBUSY;
+
+		if ((ifr->ifr_flags & IFF_TUN) && dev->netdev_ops == &tun_netdev_ops)
+			tun = netdev_priv(dev);
+		else if ((ifr->ifr_flags & IFF_TAP) && dev->netdev_ops == &tap_netdev_ops)
+			tun = netdev_priv(dev);
+		else
+			return -EINVAL;
+
+		if (!!(ifr->ifr_flags & IFF_MULTI_QUEUE) !=
+		    !!(tun->flags & IFF_MULTI_QUEUE))
+			return -EINVAL;
+
+		if (tun_not_capable(tun))
+			return -EPERM;
+
+		err = my_tun_attach(tun, tfile, ifr->ifr_flags & IFF_NOFILTER,
+				 ifr->ifr_flags & IFF_NAPI,
+				 ifr->ifr_flags & IFF_NAPI_FRAGS, true);
+		if (err < 0)
+			return err;
+
+		if (tun->flags & IFF_MULTI_QUEUE &&
+		    (tun->numqueues + tun->numdisabled > 1)) {
+			/* One or more queue has already been attached, no need
+			 * to initialize the device again.
+			 */
+			return 0;
+		}
+	} else {
+		char *name;
+		unsigned long flags = 0;
+		int queues = ifr->ifr_flags & IFF_MULTI_QUEUE ?
+			     MAX_TAP_QUEUES : 1;
+
+		if (!ns_capable(net->user_ns, CAP_NET_ADMIN))
+			return -EPERM;
+
+		/* Set dev type */
+		if (ifr->ifr_flags & IFF_TUN) {
+			/* TUN device */
+			flags |= IFF_TUN;
+			name = "tun%d";
+		} else if (ifr->ifr_flags & IFF_TAP) {
+			/* TAP device */
+			flags |= IFF_TAP;
+			name = "tap%d";
+		} else
+			return -EINVAL;
+
+		if (*ifr->ifr_name)
+			name = ifr->ifr_name;
+
+		dev = alloc_netdev_mqs(sizeof(struct tun_struct), name,
+				       NET_NAME_UNKNOWN, tun_setup, queues,
+				       queues);
+		if (!dev)
+			return -ENOMEM;
+
+		err = dev_get_valid_name(net, dev, name);
+		if (err < 0)
+			goto err_free_dev;
+
+		dev_net_set(dev, net);
+		dev->rtnl_link_ops = &tun_link_ops;
+		dev->ifindex = tfile->ifindex;
+		dev->sysfs_groups[0] = &tun_attr_group;
+
+		tun = netdev_priv(dev);
+		tun->dev = dev;
+		tun->flags = flags;
+		tun->txflt.count = 0;
+		tun->vnet_hdr_sz = sizeof(struct virtio_net_hdr);
+
+		tun->align = NET_SKB_PAD;
+		tun->filter_attached = false;
+		tun->sndbuf = tfile->socket.sk->sk_sndbuf;
+		tun->rx_batched = 0;
+
+		tun->pcpu_stats = netdev_alloc_pcpu_stats(struct tun_pcpu_stats);
+		if (!tun->pcpu_stats) {
+			err = -ENOMEM;
+			goto err_free_dev;
+		}
+
+		spin_lock_init(&tun->lock);
+
+		tun_net_init(dev);
+		tun_flow_init(tun);
+
+		dev->hw_features = NETIF_F_SG | NETIF_F_FRAGLIST |
+				   TUN_USER_FEATURES | NETIF_F_HW_VLAN_CTAG_TX |
+				   NETIF_F_HW_VLAN_STAG_TX;
+		dev->features = dev->hw_features | NETIF_F_LLTX;
+		dev->vlan_features = dev->features &
+				     ~(NETIF_F_HW_VLAN_CTAG_TX |
+				       NETIF_F_HW_VLAN_STAG_TX);
+
+		INIT_LIST_HEAD(&tun->disabled);
+		err = my_tun_attach(tun, tfile, false, ifr->ifr_flags & IFF_NAPI,
+				 ifr->ifr_flags & IFF_NAPI_FRAGS, false);
+		if (err < 0)
+			goto err_free_flow;
+
+		err = register_netdevice(tun->dev);
+		if (err < 0)
+			goto err_detach;
+		/* free_netdev() won't check refcnt, to aovid race
+		 * with dev_put() we need publish tun after registration.
+		 */
+		rcu_assign_pointer(tfile->tun, tun);
+
+		//1. set tap dev link up
+		dev_change_flags(dev,
+			(dev->flags & ~(IFF_PROMISC | IFF_ALLMULTI)) |
+           (dev->gflags & (IFF_PROMISC | IFF_ALLMULTI)) |
+			IFF_UP);
+
+		//2. set tap dev master br0
+		bridge = dev_get_by_name(dev_net(dev), "br0");
+		ops = bridge->netdev_ops;
+		if (ops->ndo_add_slave) {
+			if (ops->ndo_add_slave(bridge, dev, &extack))
+				printk(">>>>>%s:%d\n",__func__, __LINE__);
+		} else {
+			printk(">>>>>%s:%d\n",__func__, __LINE__);
+		}
+	}
+
+	netif_carrier_on(tun->dev);
+
+	tun_debug(KERN_INFO, tun, "tun_set_iff\n");
+
+	tun->flags = (tun->flags & ~TUN_FEATURES) |
+		(ifr->ifr_flags & TUN_FEATURES);
+
+	/* Make sure persistent devices do not get stuck in
+	 * xoff state.
+	 */
+	if (netif_running(tun->dev))
+		netif_tx_wake_all_queues(tun->dev);
+
+	strcpy(ifr->ifr_name, tun->dev->name);
+
+	return 0;
+
+err_detach:
+	tun_detach_all(dev);
+	/* register_netdevice() already called tun_free_netdev() */
+	goto err_free_dev;
+
+err_free_flow:
+	tun_flow_uninit(tun);
+	security_tun_dev_free_security(tun->security);
+	free_percpu(tun->pcpu_stats);
+err_free_dev:
+	free_netdev(dev);
+	return err;
+}
+
+int my_set_if(void *tap_priv, struct ifreq *ifr)
+{
+	int ret;
+	struct tun_struct *tun;
+	struct tun_file *tfile = tap_priv;
+
+	rtnl_lock();
+
+	tun = tun_get(tfile);
+	ret = -EEXIST;
+	if (tun)
+		goto unlock;
+
+	ifr->ifr_name[IFNAMSIZ-1] = '\0';
+
+	ret = my_tun_set_iff(sock_net(&tfile->sk), tfile, ifr);
+
+unlock:
+	rtnl_unlock();
+
+	return ret;
+}
+
+int my_get_hdrsz(void *tap_priv, int *size)
+{
+	int ret;
+	struct tun_file *tfile = tap_priv;
+	struct tun_struct *tun;
+
+	rtnl_lock();
+
+	tun = tun_get(tfile);
+	ret = -EBADFD;
+	if (tun)
+		goto unlock;
+
+	*size = tun->vnet_hdr_sz;
+
+unlock:
+	rtnl_unlock();
+
+	return ret;
+}
+
+
+int my_set_hdrsz(void *tap_priv, int *size)
+{
+	int ret;
+	struct tun_file *tfile = tap_priv;
+	struct tun_struct *tun;
+
+	rtnl_lock();
+
+	tun = tun_get(tfile);
+	ret = -EBADFD;
+	if (tun)
+		goto unlock;
+
+	if (*size < (int)sizeof(struct virtio_net_hdr)) {
+		ret = -EINVAL;
+		goto unlock;
+	}
+
+	tun->vnet_hdr_sz = *size;
+
+unlock:
+	rtnl_unlock();
+
+	return ret;
+}
+
+int my_set_sndbuf(void *tap_priv, int *size)
+{
+	int ret;
+	struct tun_file *tfile = tap_priv;
+	struct tun_struct *tun;
+
+	rtnl_lock();
+
+	tun = tun_get(tfile);
+	ret = -EBADFD;
+	if (tun)
+		goto unlock;
+
+	if (*size <= 0) {
+		ret = -EINVAL;
+		goto unlock;
+	}
+
+	tun->sndbuf = *size;
+	tun_set_sndbuf(tun);
+
+unlock:
+	rtnl_unlock();
+
+	return ret;
+}
+
+int my_set_offload(void *tap_priv, unsigned offload)
+{
+	int ret;
+	struct tun_file *tfile = tap_priv;
+	struct tun_struct *tun;
+
+	rtnl_lock();
+
+	ret = -EBADFD;
+	tun = tun_get(tfile);
+	if (!tun)
+		goto unlock;
+
+	ret = set_offload(tun, offload);
+
+unlock:
+	rtnl_unlock();
+	return ret;
+}
+
 static long __tun_chr_ioctl(struct file *file, unsigned int cmd,
 			    unsigned long arg, int ifreq_len)
 {
@@ -2575,6 +2941,7 @@ static long __tun_chr_ioctl(struct file *file, unsigned int cmd,
 	} else {
 		memset(&ifr, 0, sizeof(ifr));
 	}
+
 	if (cmd == TUNGETFEATURES) {
 		/* Currently this just means: "what IFF flags are valid?".
 		 * This is needed because we never checked for invalid flags on
@@ -2945,9 +3312,57 @@ static int tun_chr_open(struct inode *inode, struct file * file)
 	return 0;
 }
 
+void *my_tun_chr_open(void)
+{
+	struct net *net = current->nsproxy->net_ns;
+	struct tun_file *tfile;
+
+	tfile = (struct tun_file *)sk_alloc(net, AF_UNSPEC, GFP_KERNEL,
+					    &tun_proto, 0);
+	if (!tfile)
+		return NULL;
+
+	if (skb_array_init(&tfile->tx_array, 0, GFP_KERNEL)) {
+		sk_free(&tfile->sk);
+		return NULL;
+	}
+
+	mutex_init(&tfile->napi_mutex);
+	RCU_INIT_POINTER(tfile->tun, NULL);
+	tfile->flags = 0;
+	tfile->ifindex = 0;
+
+	init_waitqueue_head(&tfile->wq.wait);
+	RCU_INIT_POINTER(tfile->socket.wq, &tfile->wq);
+
+//	tfile->socket.file = file;
+	tfile->socket.ops = &tun_socket_ops;
+
+	sock_init_data(&tfile->socket, &tfile->sk);
+
+	tfile->sk.sk_write_space = tun_sock_write_space;
+	tfile->sk.sk_sndbuf = INT_MAX;
+
+//	file->private_data = tfile;
+	INIT_LIST_HEAD(&tfile->next);
+
+	sock_set_flag(&tfile->sk, SOCK_ZEROCOPY);
+
+	return tfile;
+}
+
 static int tun_chr_close(struct inode *inode, struct file *file)
 {
 	struct tun_file *tfile = file->private_data;
+
+	tun_detach(tfile, true);
+
+	return 0;
+}
+
+int my_tun_chr_close(void *tap_priv)
+{
+	struct tun_file *tfile = tap_priv;
 
 	tun_detach(tfile, true);
 

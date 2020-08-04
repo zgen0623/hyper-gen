@@ -251,15 +251,9 @@ struct vhost_virtqueue {
 
 struct vhost_dev {
     VirtIODevice *vdev;
- //   MemoryListener memory_listener;
     struct vhost_memory *mem;
- //   int n_mem_sections;
-  //  MemoryRegionSection *mem_sections;
-   // int n_tmp_sections;
-  //  MemoryRegionSection *tmp_sections;
     struct vhost_virtqueue *vqs;
     int nvqs;
-    /* the first virtqueue which would be used by this vhost dev */
     int vq_index;
     uint64_t features;
     uint64_t acked_features;
@@ -267,7 +261,6 @@ struct vhost_dev {
     uint64_t protocol_features;
     uint64_t max_queues;
     bool started;
-   // const VhostOps *vhost_ops;
     void *opaque;
 };
 

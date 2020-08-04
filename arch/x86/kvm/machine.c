@@ -638,15 +638,6 @@ static void kvm_pc_setup_irq_routing(struct kvm *kvm)
 }
 
 
-static void create_vnet(struct kvm *kvm)
-{
-
-}
-static void destroy_vnet(struct kvm *kvm)
-{
-
-}
-
 void init_virt_machine(struct kvm_vcpu *vcpu)
 {
 	INIT_LIST_HEAD(&vcpu->pci_bar_update_list);
@@ -665,7 +656,7 @@ void init_virt_machine(struct kvm_vcpu *vcpu)
 
 	create_vpci(vcpu->kvm);
 	create_vblk(vcpu->kvm);
-	create_vnet(vcpu->kvm);
+//	create_vnet(vcpu->kvm);
 }
 
 int create_virt_machine(struct kvm *kvm)
@@ -732,7 +723,7 @@ void destroy_virt_machine(struct kvm *kvm)
 	vfree(kvm->possible_cpus);
 
 	destroy_vblk(kvm);
-	destroy_vnet(kvm);
+//	destroy_vnet(kvm);
 	destroy_vpci(kvm);
 
 	kfree(kvm->irq_routes);
