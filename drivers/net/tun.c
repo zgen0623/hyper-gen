@@ -776,6 +776,7 @@ static int tun_attach(struct tun_struct *tun, struct file *file,
 	 */
 	if (publish_tun)
 		rcu_assign_pointer(tfile->tun, tun);
+
 	rcu_assign_pointer(tun->tfiles[tun->numqueues], tfile);
 	tun->numqueues++;
 	tun_set_real_num_queues(tun);
@@ -2234,6 +2235,9 @@ static int tun_set_iff(struct net *net, struct file *file, struct ifreq *ifr)
 	struct tun_file *tfile = file->private_data;
 	struct net_device *dev;
 	int err;
+	struct net_device *bridge;
+	const struct net_device_ops *ops;
+	struct netlink_ext_ack extack;
 
 	if (tfile->detached)
 		return -EINVAL;
@@ -2281,8 +2285,7 @@ static int tun_set_iff(struct net *net, struct file *file, struct ifreq *ifr)
 			 */
 			return 0;
 		}
-	}
-	else {
+	} else {
 		char *name;
 		unsigned long flags = 0;
 		int queues = ifr->ifr_flags & IFF_MULTI_QUEUE ?
@@ -2315,6 +2318,7 @@ static int tun_set_iff(struct net *net, struct file *file, struct ifreq *ifr)
 
 		if (!dev)
 			return -ENOMEM;
+
 		err = dev_get_valid_name(net, dev, name);
 		if (err < 0)
 			goto err_free_dev;
@@ -2371,6 +2375,22 @@ static int tun_set_iff(struct net *net, struct file *file, struct ifreq *ifr)
 		 * with dev_put() we need publish tun after registration.
 		 */
 		rcu_assign_pointer(tfile->tun, tun);
+
+		//1. set tap dev link up
+		dev_change_flags(dev,
+			(dev->flags & ~(IFF_PROMISC | IFF_ALLMULTI)) |
+           (dev->gflags & (IFF_PROMISC | IFF_ALLMULTI)) |
+			IFF_UP);
+
+		//2. set tap dev master br0
+		bridge = dev_get_by_name(dev_net(dev), "br0");
+		ops = bridge->netdev_ops;
+		if (ops->ndo_add_slave) {
+			if (ops->ndo_add_slave(bridge, dev, &extack))
+				printk(">>>>>%s:%d\n",__func__, __LINE__);
+		} else {
+			printk(">>>>>%s:%d\n",__func__, __LINE__);
+		}
 	}
 
 	netif_carrier_on(tun->dev);
@@ -2387,6 +2407,8 @@ static int tun_set_iff(struct net *net, struct file *file, struct ifreq *ifr)
 		netif_tx_wake_all_queues(tun->dev);
 
 	strcpy(ifr->ifr_name, tun->dev->name);
+
+
 	return 0;
 
 err_detach:
@@ -2583,6 +2605,7 @@ static long __tun_chr_ioctl(struct file *file, unsigned int cmd,
 			ret = -EFAULT;
 		goto unlock;
 	}
+
 	if (cmd == TUNSETIFINDEX) {
 		ret = -EPERM;
 		if (tun)
@@ -2892,6 +2915,7 @@ static int tun_chr_open(struct inode *inode, struct file * file)
 					    &tun_proto, 0);
 	if (!tfile)
 		return -ENOMEM;
+
 	if (skb_array_init(&tfile->tx_array, 0, GFP_KERNEL)) {
 		sk_free(&tfile->sk);
 		return -ENOMEM;
