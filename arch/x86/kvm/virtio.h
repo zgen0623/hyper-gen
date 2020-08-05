@@ -262,6 +262,9 @@ struct vhost_dev {
     uint64_t max_queues;
     bool started;
     void *opaque;
+    long (*ioctl_hook)(void *, unsigned int,
+					unsigned long);
+	int (*release_hook)(void *);
 };
 
 

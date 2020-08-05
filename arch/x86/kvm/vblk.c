@@ -40,14 +40,11 @@
 #include <uapi/linux/virtio_ids.h>
 #include <linux/pci_ids.h>
 
-void * __must_check my_vhost_scsi_open(void);
-
-int __must_check my_vhost_scsi_release(void *priv);
-
-long __must_check
-my_vhost_scsi_ioctl(void *opaque,
+long my_vhost_scsi_ioctl(void *opaque,
 		 unsigned int ioctl,
 		 unsigned long arg);
+int my_vhost_scsi_release(void *priv);
+void *my_vhost_scsi_open(void);
 
 static int kernel_feature_bits[] = {
     VIRTIO_F_NOTIFY_ON_EMPTY,
@@ -301,6 +298,8 @@ static void vhost_scsi_realize(VirtIODevice *vdev)
     vs->dev.vqs = kzalloc(sizeof(struct vhost_virtqueue) * vs->dev.nvqs, GFP_KERNEL);
     vs->dev.vq_index = 0;
     vs->dev.backend_features = 0;
+	vs->dev.ioctl_hook = my_vhost_scsi_ioctl;
+	vs->dev.release_hook = my_vhost_scsi_release;
 
     ret = vhost_dev_init_(&vs->dev, vhost_priv, 0);
     if (ret < 0) {

@@ -38,12 +38,6 @@
 #include <uapi/linux/virtio_config.h>
 #include <linux/pci_ids.h>
 
-int my_vhost_scsi_release(void *priv);
-
-long my_vhost_scsi_ioctl(void *opaque,
-		 unsigned int ioctl,
-		 unsigned long arg);
-
 int kvm_ioeventfd(struct kvm *kvm, struct kvm_ioeventfd *args);
 void vhost_inject_virq_kvm(uint64_t kvm_id, void *priv);
 void *vhost_alloc_irq_entry_kvm(uint64_t kvm_id, int virq);
@@ -73,17 +67,6 @@ static uint16_t virtio_get_queue_index(VirtQueue *vq)
 
 void vhost_dev_stop_(struct vhost_dev *hdev, VirtIODevice *vdev)
 {           
-    int i;
-    
-#if 0
-    for (i = 0; i < hdev->nvqs; ++i) {
-        vhost_virtqueue_stop(hdev,
-                             vdev,
-                             hdev->vqs + i,
-                             hdev->vq_index + i);
-    }
-#endif
-
     hdev->started = false;
     hdev->vdev = NULL;
 }
@@ -121,7 +104,7 @@ void vhost_virtqueue_mask(struct vhost_dev *hdev, VirtIODevice *vdev, int n,
     }
 
     file.index = n - hdev->vq_index;
-    r = my_vhost_scsi_ioctl(hdev->opaque, VHOST_SET_VRING_CALL, (uint64_t)&file);
+    r = hdev->ioctl_hook(hdev->opaque, VHOST_SET_VRING_CALL, (uint64_t)&file);
     if (r < 0)
         printk(">>>>>%s:%d vhost_set_vring_call failed\n",
 			__func__, __LINE__);
@@ -132,7 +115,7 @@ static int vhost_dev_set_features(struct vhost_dev *dev)
     uint64_t features = dev->acked_features;
     int r;
 
-    r = my_vhost_scsi_ioctl(dev->opaque, VHOST_SET_FEATURES, (uint64_t)&features);
+    r = dev->ioctl_hook(dev->opaque, VHOST_SET_FEATURES, (uint64_t)&features);
     if (r < 0)
         printk(">>>>%s:%d vhost_set_features failed\n",
 			__func__, __LINE__);
@@ -192,7 +175,7 @@ static int vhost_virtqueue_set_addr(struct vhost_dev *dev,
         .flags = 0,
     };
 
-    int r = my_vhost_scsi_ioctl(dev->opaque, VHOST_SET_VRING_ADDR, (uint64_t)&addr);
+    int r = dev->ioctl_hook(dev->opaque, VHOST_SET_VRING_ADDR, (uint64_t)&addr);
     if (r < 0) {
         printk(">>>>>%s:%d vhost_set_vring_addr failed\n",
 			__func__, __LINE__);
@@ -241,7 +224,7 @@ static int vhost_virtqueue_start(struct vhost_dev *dev,
         return 0;
 
     vq->num = state.num = virtio_queue_get_num(vdev, idx);
-    r = my_vhost_scsi_ioctl(dev->opaque, VHOST_SET_VRING_NUM, (uint64_t)&state);
+    r = dev->ioctl_hook(dev->opaque, VHOST_SET_VRING_NUM, (uint64_t)&state);
     if (r) {
         printk(">>>>>%s:%d vhost_set_vring_num failed\n",
 			__func__, __LINE__);
@@ -249,7 +232,7 @@ static int vhost_virtqueue_start(struct vhost_dev *dev,
     }
 
     state.num = virtio_queue_get_last_avail_idx(vdev, idx);
-    r = my_vhost_scsi_ioctl(dev->opaque, VHOST_SET_VRING_BASE, (uint64_t)&state);
+    r = dev->ioctl_hook(dev->opaque, VHOST_SET_VRING_BASE, (uint64_t)&state);
     if (r) {
         printk(">>>>>%s:%d vhost_set_vring_base failed\n",
 			__func__, __LINE__);
@@ -297,7 +280,7 @@ static int vhost_virtqueue_start(struct vhost_dev *dev,
     file.fd = 1;
     file.evt_id = vvq->evt_id;
     file.kvm_id = kvm->id;
-    r = my_vhost_scsi_ioctl(dev->opaque, VHOST_SET_VRING_KICK, (uint64_t)&file);
+    r = dev->ioctl_hook(dev->opaque, VHOST_SET_VRING_KICK, (uint64_t)&file);
     if (r) {
         printk(">>>>%s:%d vhost_set_vring_kick failed\n",
 			__func__, __LINE__);
@@ -310,7 +293,7 @@ static int vhost_virtqueue_start(struct vhost_dev *dev,
     if (msix_enabled(&vdev->pci_dev) &&
         virtio_queue_vector(vdev, idx) == VIRTIO_NO_VECTOR) {
         file.fd = 0;
-    	r = my_vhost_scsi_ioctl(dev->opaque, VHOST_SET_VRING_CALL, (uint64_t)&file);
+    	r = dev->ioctl_hook(dev->opaque, VHOST_SET_VRING_CALL, (uint64_t)&file);
         if (r) {
         	printk(">>>>>%s:%d vhost_set_vring_base failed\n",
 			__func__, __LINE__);
@@ -380,13 +363,10 @@ static void virtio_queue_set_last_avail_idx(VirtIODevice *vdev, int n,
                                      unsigned int idx)
 {       
     if (virtio_vdev_has_feature(vdev, VIRTIO_F_RING_PACKED)) {
-	printk(">>>>>%s:%d \n", __func__, __LINE__);
         virtio_queue_packed_set_last_avail_idx(vdev, n, idx);
     } else {
-	printk(">>>>>%s:%d \n", __func__, __LINE__);
         virtio_queue_split_set_last_avail_idx(vdev, n, idx);
     }
-	printk(">>>>>%s:%d \n", __func__, __LINE__);
 }
 
 
@@ -406,10 +386,8 @@ static void virtio_split_packed_update_used_idx(VirtIODevice *vdev, int n)
 static void virtio_queue_update_used_idx(VirtIODevice *vdev, int n)
 {   
     if (virtio_vdev_has_feature(vdev, VIRTIO_F_RING_PACKED)) {
-	printk(">>>>>%s:%d \n", __func__, __LINE__);
         return virtio_queue_packed_update_used_idx(vdev, n);
     } else {           
-	printk(">>>>>%s:%d \n", __func__, __LINE__);
         return virtio_split_packed_update_used_idx(vdev, n);
     }                  
 }
@@ -424,31 +402,29 @@ static void vhost_virtqueue_stop(struct vhost_dev *dev,
                                     struct vhost_virtqueue *vq,
                                     unsigned idx)
 {
+    int r;
     int vhost_vq_index = idx - dev->vq_index;
     struct vhost_vring_state state = {
         .index = vhost_vq_index,
     };
-    int r;
 
-    if (virtio_queue_get_desc_addr(vdev, idx) == 0)
+    if (!virtio_queue_get_desc_addr(vdev, idx)) {
         return;
+	}
 
 	printk(">>>>>%s:%d \n", __func__, __LINE__);
 
-    r = my_vhost_scsi_ioctl(dev->opaque, VHOST_GET_VRING_BASE, (uint64_t)&state);
+    r = dev->ioctl_hook(dev->opaque, VHOST_GET_VRING_BASE, (uint64_t)&state);
     if (r < 0) {
-	printk(">>>>>%s:%d \n", __func__, __LINE__);
+		printk(">>>>>%s:%d \n", __func__, __LINE__);
         virtio_queue_restore_last_avail_idx(vdev, idx);
     } else {
-	printk(">>>>>%s:%d \n", __func__, __LINE__);
+		printk(">>>>>%s:%d \n", __func__, __LINE__);
         virtio_queue_set_last_avail_idx(vdev, idx, state.num);
     }
 
-	printk(">>>>>%s:%d \n", __func__, __LINE__);
     virtio_queue_invalidate_signalled_used(vdev, idx);
-	printk(">>>>>%s:%d \n", __func__, __LINE__);
     virtio_queue_update_used_idx(vdev, idx);
-	printk(">>>>>%s:%d \n", __func__, __LINE__);
 }
 
 /* Host notifiers must be enabled at this point. */
@@ -480,7 +456,7 @@ int vhost_dev_start(struct vhost_dev *hdev, VirtIODevice *vdev)
     	vmr->userspace_addr  = ghc.hva;
     	vmr->flags_padding   = 0;
 	
-    	r = my_vhost_scsi_ioctl(hdev->opaque, VHOST_SET_MEM_TABLE, (uint64_t)(void*)mem);
+    	r = hdev->ioctl_hook(hdev->opaque, VHOST_SET_MEM_TABLE, (uint64_t)(void*)mem);
 	    if (r < 0) {
         	printk(">>>>>%s:%d error: vhost_set_mem_table failed ret=%d\n",
 				__func__, __LINE__, r);
@@ -536,7 +512,7 @@ void *vhost_alloc_notify_evt_(uint64_t evt_id,
 	head = kzalloc(sizeof(wait_queue_head_t), GFP_KERNEL);
 	if (!head) {
 		printk(">>>>>error %s:%d\n",__func__, __LINE__);
-		return;
+		return NULL;
 	}
 
 	init_waitqueue_head(head);
@@ -947,7 +923,7 @@ static int vhost_virtqueue_init(struct vhost_dev *dev,
     };  
         
     file.fd = 1;
-    r = my_vhost_scsi_ioctl(dev->opaque, VHOST_SET_VRING_CALL, (uint64_t)&file);
+    r = dev->ioctl_hook(dev->opaque, VHOST_SET_VRING_CALL, (uint64_t)&file);
     if (r < 0) {
         printk(">>>>%s:%d error: vhost_set_vring_call failed\n",
 			__func__, __LINE__);
@@ -972,7 +948,7 @@ static int vhost_virtqueue_set_busyloop_timeout(struct vhost_dev *dev,
     };
     int r;
 
-    r = my_vhost_scsi_ioctl(dev->opaque, VHOST_SET_VRING_BUSYLOOP_TIMEOUT, (uint64_t)&state);
+    r = dev->ioctl_hook(dev->opaque, VHOST_SET_VRING_BUSYLOOP_TIMEOUT, (uint64_t)&state);
     if (r) {
         printk(">>>>>>>%s:%d vhost_set_vring_busyloop_timeout failed\n",
 			__func__, __LINE__);
@@ -984,7 +960,7 @@ static int vhost_virtqueue_set_busyloop_timeout(struct vhost_dev *dev,
 
 static void vhost_dev_cleanup_(struct vhost_dev *hdev)
 {
-    my_vhost_scsi_release(hdev->opaque);
+    hdev->release_hook(hdev->opaque);
 
     memset(hdev, 0, sizeof(struct vhost_dev));
 }
@@ -998,14 +974,14 @@ int vhost_dev_init_(struct vhost_dev *hdev, void *opaque,
     hdev->vdev = NULL;
 	hdev->opaque = opaque;
 
-    r = my_vhost_scsi_ioctl(hdev->opaque, VHOST_SET_OWNER, 0);
+    r = hdev->ioctl_hook(hdev->opaque, VHOST_SET_OWNER, 0);
     if (r < 0) {
         printk(">>>>>>%s:%d error: vhost_set_owner failed\n",
 			__func__, __LINE__);
         goto fail;
     }
 
-    r = my_vhost_scsi_ioctl(hdev->opaque, VHOST_GET_FEATURES, (uint64_t)&features);
+    r = hdev->ioctl_hook(hdev->opaque, VHOST_GET_FEATURES, (uint64_t)&features);
     if (r < 0) {
         printk(">>>>>>%s:%d error: vhost_get_features failed\n",
 			__func__, __LINE__);
@@ -1044,8 +1020,6 @@ fail:
     vhost_dev_cleanup_(hdev);
     return r;
 }
-
-
 
 VirtQueue *virtio_add_queue(VirtIODevice *vdev, int queue_size,
                             VirtIOHandleOutput handle_output)
@@ -1124,7 +1098,6 @@ void virtio_cleanup_(VirtIODevice *vdev)
     kfree(vdev->vector_queues);
     kfree(vdev->vq);
 }
-
 
 uint64_t vhost_get_features(struct vhost_dev *hdev, const int *feature_bits,
                             uint64_t features)
@@ -2125,7 +2098,6 @@ static void virtio_address_space_read(VirtIODevice *vdev, hwaddr addr,
         break;
     }
 }
-
 
 static uint32_t virtio_read_config(PCIDevice *pci_dev,
                                    uint32_t address, int len)
