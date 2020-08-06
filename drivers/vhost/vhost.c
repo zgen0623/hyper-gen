@@ -248,7 +248,6 @@ EXPORT_SYMBOL_GPL(vhost_poll_stop);
 static void my_vhost_poll_stop(struct vhost_virtqueue *vq)
 {
 	printk("%s:%d\n", __func__, __LINE__);
-//	vhost_free_notify_evt_(vq->evt_id, vq->kvm_id);
 	vq->notify_status = -1;
 	kfree(vq->notify_priv);
 	vq->notify_priv = NULL;
@@ -1453,9 +1452,9 @@ long vhost_vring_ioctl(struct vhost_dev *d, int ioctl, void __user *argp)
 			}
 		}
 
-#if 0
-		printk(">>>>>>%s:%d [%d] %d %d evt=%d %p %d\n",__func__, __LINE__,
-			idx, f.fd, vq->notify_status, f.evt_id, vq->handle_kick, pollstart);
+#if 1
+		printk(">>>>>>%s:%d [%d] fd=%d prev_fd=%d evt=%d poll=%d\n",__func__, __LINE__,
+			idx, f.fd, vq->notify_status, f.evt_id, pollstart);
 #endif
 
 		vq->notify_status = f.fd;
@@ -2579,6 +2578,7 @@ void vhost_disable_notify(struct vhost_dev *dev, struct vhost_virtqueue *vq)
 
 	if (vq->used_flags & VRING_USED_F_NO_NOTIFY)
 		return;
+
 	vq->used_flags |= VRING_USED_F_NO_NOTIFY;
 	if (!vhost_has_feature(vq, VIRTIO_RING_F_EVENT_IDX)) {
 		r = vhost_update_used_flags(vq);

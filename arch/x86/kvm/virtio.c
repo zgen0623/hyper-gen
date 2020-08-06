@@ -41,7 +41,6 @@
 int kvm_ioeventfd(struct kvm *kvm, struct kvm_ioeventfd *args);
 void vhost_inject_virq_kvm(uint64_t kvm_id, void *priv);
 void *vhost_alloc_irq_entry_kvm(uint64_t kvm_id, int virq);
-void my_vhost_clear_signaled(void *opaque, int vq_idx);
 
 static int virtio_queue_get_num(VirtIODevice *vdev, int n);
 static hwaddr virtio_queue_get_desc_size(VirtIODevice *vdev, int n);
@@ -51,6 +50,7 @@ static void vhost_virtqueue_stop(struct vhost_dev *dev,
                                     struct VirtIODevice *vdev,
                                     struct vhost_virtqueue *vq,
                                     unsigned idx);
+static hwaddr virtio_queue_get_desc_addr(VirtIODevice *vdev, int n);
 static hwaddr virtio_queue_get_avail_size(VirtIODevice *vdev, int n);
 static hwaddr virtio_queue_get_used_size(VirtIODevice *vdev, int n);
 
@@ -64,6 +64,54 @@ static uint16_t virtio_get_queue_index(VirtQueue *vq)
 {   
     return vq->queue_index;
 }
+
+
+
+
+size_t virtio_feature_get_config_size(VirtIOFeature *feature_sizes,
+                                      uint64_t host_features)
+{   
+    size_t config_size = 0;
+    int i;
+                                                    
+    for (i = 0; feature_sizes[i].flags != 0; i++)
+        if (host_features & feature_sizes[i].flags)
+            config_size = MAX(feature_sizes[i].end, config_size);
+    
+    return config_size;
+}
+
+bool virtio_queue_enabled(VirtIODevice *vdev, int n)
+{   
+    return virtio_queue_get_desc_addr(vdev, n) != 0;
+}  
+
+int virtio_get_num_queues(VirtIODevice *vdev)
+{   
+    int i;
+        
+    for (i = 0; i < VIRTIO_QUEUE_MAX; i++) {
+        if (!virtio_queue_get_num(vdev, i)) {
+            break;
+        }
+    }   
+    
+    return i;
+}
+
+void vhost_ack_features(struct vhost_dev *hdev, const int *feature_bits,
+                        uint64_t features)
+{   
+    const int *bit = feature_bits;
+
+    while (*bit != VHOST_INVALID_FEATURE_BIT) {
+        uint64_t bit_mask = (1ULL << *bit);
+        if (features & bit_mask) {
+            hdev->acked_features |= bit_mask;
+        }
+        bit++;
+    }   
+} 
 
 void vhost_dev_stop_(struct vhost_dev *hdev, VirtIODevice *vdev)
 {           
@@ -288,7 +336,7 @@ static int vhost_virtqueue_start(struct vhost_dev *dev,
     }
 
     /* Clear and discard previous events if any. */
-	my_vhost_clear_signaled(dev->opaque, vhost_vq_index);
+	dev->clear_vq_signaled(dev->opaque, vhost_vq_index);
 
     if (msix_enabled(&vdev->pci_dev) &&
         virtio_queue_vector(vdev, idx) == VIRTIO_NO_VECTOR) {
@@ -497,7 +545,7 @@ fail_features:
 void event_notifier_set(VirtQueue *vq)
 {
 	wait_queue_head_t *head = vq->wq_head;
-
+ 
 	if (head != NULL)
     	wake_up(head);
 }
@@ -958,7 +1006,7 @@ static int vhost_virtqueue_set_busyloop_timeout(struct vhost_dev *dev,
     return 0;
 }
 
-static void vhost_dev_cleanup_(struct vhost_dev *hdev)
+void vhost_dev_cleanup_(struct vhost_dev *hdev)
 {
     hdev->release_hook(hdev->opaque);
 
@@ -1073,7 +1121,6 @@ void virtio_init(VirtIODevice *vdev, const char *name,
     vdev->queue_sel = 0;
     vdev->config_vector = VIRTIO_NO_VECTOR;
     vdev->vq = kzalloc(sizeof(VirtQueue) * VIRTIO_QUEUE_MAX, GFP_KERNEL);
-    vdev->vm_running = false;
     vdev->broken = false;
 
     for (i = 0; i < VIRTIO_QUEUE_MAX; i++) {
@@ -1083,7 +1130,7 @@ void virtio_init(VirtIODevice *vdev, const char *name,
         vdev->vq[i].host_notifier_enabled = false;
     }
 
-    vdev->name = name;
+    vdev->name = (char*)name;
     vdev->config_len = config_size;
     if (vdev->config_len) {
         vdev->config = kzalloc(config_size, GFP_KERNEL);
@@ -1418,7 +1465,7 @@ static void virtio_pci_notify(VirtIODevice *vdev, uint16_t vector)
     }
 }
 
-static void virtio_notify_vector(VirtIODevice *vdev, uint16_t vector)
+void virtio_notify_vector(VirtIODevice *vdev, uint16_t vector)
 {
     if (unlikely(vdev->broken))
         return;
@@ -1766,8 +1813,15 @@ static void virtio_queue_notify(VirtIODevice *vdev, int n)
 {                                   
     VirtQueue *vq = &vdev->vq[n];
     
-    if (unlikely(!vq->vring.desc || vdev->broken))
+    if (unlikely(!vq->vring.desc || vdev->broken)) {
         return;
+	}
+
+#if 0
+	if (0 == strncmp(vdev->pci_dev.name,"vhost-net", 9)) {
+		printk(">>>>%s:%d [%d] %d\n",__func__, __LINE__, n, vq->host_notifier_enabled);
+	}
+#endif
 
     if (vq->host_notifier_enabled) {
         event_notifier_set(vq);

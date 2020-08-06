@@ -28,6 +28,7 @@ struct vhost_vring_file {
 	int virq;
 	uint64_t kvm_id;
 	uint64_t evt_id;
+	uint64_t tap_priv;
 };
 
 struct vhost_vring_addr {

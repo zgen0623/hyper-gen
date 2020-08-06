@@ -1365,6 +1365,43 @@ static unsigned int tun_chr_poll(struct file *file, poll_table *wait)
 	return mask;
 }
 
+unsigned int my_tun_alloc_notify(wait_queue_entry_t *wait, void *priv, void **ret_head)
+{
+	struct socket *sock = priv;
+	struct sock *sk = sock->sk; 
+	struct tun_file *tfile = container_of(sk, struct tun_file, sk);
+	struct tun_struct *tun = tun_get(tfile);
+
+	unsigned int mask = 0;
+	wait_queue_head_t *head;
+
+	if (!tun)
+		return POLLERR;
+
+	head = sk_sleep(sk);
+	add_wait_queue(head, wait);
+	*ret_head = head;
+
+	if (!skb_array_empty(&tfile->tx_array))
+		mask |= POLLIN | POLLRDNORM;
+
+	/* Make sure SOCKWQ_ASYNC_NOSPACE is set if not writable to
+	 * guarantee EPOLLOUT to be raised by either here or
+	 * tun_sock_write_space(). Then process could get notification
+	 * after it writes to a down device and meets -EIO.
+	 */
+	if (tun_sock_writeable(tun, tfile) ||
+	    (!test_and_set_bit(SOCKWQ_ASYNC_NOSPACE, &sk->sk_socket->flags) &&
+	     tun_sock_writeable(tun, tfile)))
+		mask |= POLLOUT | POLLWRNORM;
+
+	if (tun->dev->reg_state != NETREG_REGISTERED)
+		mask = POLLERR;
+
+	tun_put(tun);
+	return mask;
+}
+
 static struct sk_buff *tun_napi_alloc_frags(struct tun_file *tfile,
 					    size_t len,
 					    const struct iov_iter *it)
@@ -2618,6 +2655,36 @@ unlock:
 	return ret;
 }
 
+int my_tun_set_queue(void *priv, struct ifreq *ifr)
+{
+	struct tun_file *tfile = priv;
+	struct tun_struct *tun;
+	int ret = 0;
+
+	rtnl_lock();
+
+	if (ifr->ifr_flags & IFF_ATTACH_QUEUE) {
+		tun = tfile->detached;
+		if (!tun) {
+			ret = -EINVAL;
+			goto unlock;
+		}
+		ret = my_tun_attach(tun, tfile, false, tun->flags & IFF_NAPI,
+				 tun->flags & IFF_NAPI_FRAGS, true);
+	} else if (ifr->ifr_flags & IFF_DETACH_QUEUE) {
+		tun = rtnl_dereference(tfile->tun);
+		if (!tun || !(tun->flags & IFF_MULTI_QUEUE) || tfile->detached)
+			ret = -EINVAL;
+		else
+			__tun_detach(tfile, false);
+	} else
+		ret = -EINVAL;
+
+unlock:
+	rtnl_unlock();
+	return ret;
+}
+
 static int my_tun_set_iff(struct net *net, struct tun_file *tfile, struct ifreq *ifr)
 {
 	struct tun_struct *tun;
@@ -2749,6 +2816,7 @@ static int my_tun_set_iff(struct net *net, struct tun_file *tfile, struct ifreq 
 		err = register_netdevice(tun->dev);
 		if (err < 0)
 			goto err_detach;
+
 		/* free_netdev() won't check refcnt, to aovid race
 		 * with dev_put() we need publish tun after registration.
 		 */
@@ -2804,20 +2872,23 @@ err_free_dev:
 
 int my_set_if(void *tap_priv, struct ifreq *ifr)
 {
-	int ret;
+	int ret = 0;
 	struct tun_struct *tun;
 	struct tun_file *tfile = tap_priv;
 
 	rtnl_lock();
 
 	tun = tun_get(tfile);
-	ret = -EEXIST;
-	if (tun)
+	if (tun) {
+		ret = -EEXIST;
 		goto unlock;
+	}
 
 	ifr->ifr_name[IFNAMSIZ-1] = '\0';
 
 	ret = my_tun_set_iff(sock_net(&tfile->sk), tfile, ifr);
+
+	//printk(">>>>>%s:%d %lx %lx\n", __func__, __LINE__, tfile, tun_get(tfile));
 
 unlock:
 	rtnl_unlock();
@@ -2827,16 +2898,17 @@ unlock:
 
 int my_get_hdrsz(void *tap_priv, int *size)
 {
-	int ret;
+	int ret = 0;
 	struct tun_file *tfile = tap_priv;
 	struct tun_struct *tun;
 
 	rtnl_lock();
 
 	tun = tun_get(tfile);
-	ret = -EBADFD;
-	if (tun)
+	if (!tun) {
+		ret = -EBADFD;
 		goto unlock;
+	}
 
 	*size = tun->vnet_hdr_sz;
 
@@ -2849,18 +2921,19 @@ unlock:
 
 int my_set_hdrsz(void *tap_priv, int *size)
 {
-	int ret;
+	int ret = 0;
 	struct tun_file *tfile = tap_priv;
 	struct tun_struct *tun;
 
 	rtnl_lock();
 
 	tun = tun_get(tfile);
-	ret = -EBADFD;
-	if (tun)
+	if (!tun) {
+		ret = -EBADFD;
 		goto unlock;
+	}
 
-	if (*size < (int)sizeof(struct virtio_net_hdr)) {
+	if (*size < sizeof(struct virtio_net_hdr)) {
 		ret = -EINVAL;
 		goto unlock;
 	}
@@ -2875,16 +2948,17 @@ unlock:
 
 int my_set_sndbuf(void *tap_priv, int *size)
 {
-	int ret;
+	int ret = 0;
 	struct tun_file *tfile = tap_priv;
 	struct tun_struct *tun;
 
 	rtnl_lock();
 
 	tun = tun_get(tfile);
-	ret = -EBADFD;
-	if (tun)
+	if (!tun) {
+		ret = -EBADFD;
 		goto unlock;
+	}
 
 	if (*size <= 0) {
 		ret = -EINVAL;
@@ -2902,16 +2976,17 @@ unlock:
 
 int my_set_offload(void *tap_priv, unsigned offload)
 {
-	int ret;
+	int ret = 0;
 	struct tun_file *tfile = tap_priv;
 	struct tun_struct *tun;
 
 	rtnl_lock();
 
-	ret = -EBADFD;
 	tun = tun_get(tfile);
-	if (!tun)
+	if (!tun) {
+		ret = -EBADFD;
 		goto unlock;
+	}
 
 	ret = set_offload(tun, offload);
 
@@ -3617,6 +3692,17 @@ struct socket *tun_get_socket(struct file *file)
 }
 EXPORT_SYMBOL_GPL(tun_get_socket);
 
+struct socket *my_tun_get_socket(void *tap_priv)
+{
+	struct tun_file *tfile = tap_priv;
+
+	if (!tfile)
+		return NULL;
+
+	return &tfile->socket;
+}
+
+
 struct skb_array *tun_get_skb_array(struct file *file)
 {
 	struct tun_file *tfile;
@@ -3629,6 +3715,16 @@ struct skb_array *tun_get_skb_array(struct file *file)
 	return &tfile->tx_array;
 }
 EXPORT_SYMBOL_GPL(tun_get_skb_array);
+
+struct skb_array *my_tun_get_skb_array(void *tap_priv)
+{
+	struct tun_file *tfile = tap_priv;
+
+	if (!tfile)
+		return NULL;
+
+	return &tfile->tx_array;
+}
 
 module_init(tun_init);
 module_exit(tun_cleanup);

@@ -45,6 +45,7 @@ long my_vhost_scsi_ioctl(void *opaque,
 		 unsigned long arg);
 int my_vhost_scsi_release(void *priv);
 void *my_vhost_scsi_open(void);
+void my_vhost_scsi_clear_signaled(void *opaque, int vq_idx);
 
 static int kernel_feature_bits[] = {
     VIRTIO_F_NOTIFY_ON_EMPTY,
@@ -150,9 +151,11 @@ static int vhost_scsi_set_endpoint(VHostSCSI *vs)
     int ret;
 
     memset(&backend, 0, sizeof(backend));
-    strlcpy(backend.vhost_wwpn, vs->conf.wwpn, sizeof(backend.vhost_wwpn));
+    strlcpy(backend.vhost_wwpn,
+			vs->conf.wwpn, sizeof(backend.vhost_wwpn));
 
-    ret = my_vhost_scsi_ioctl(dev->opaque, VHOST_SCSI_SET_ENDPOINT, (unsigned long)&backend);
+    ret = my_vhost_scsi_ioctl(dev->opaque,
+			VHOST_SCSI_SET_ENDPOINT, (unsigned long)&backend);
     if (ret < 0) {
         printk(">>>>>error: %s:%d ret=%d\n", __func__, __LINE__, ret);
         return -1;
@@ -300,6 +303,7 @@ static void vhost_scsi_realize(VirtIODevice *vdev)
     vs->dev.backend_features = 0;
 	vs->dev.ioctl_hook = my_vhost_scsi_ioctl;
 	vs->dev.release_hook = my_vhost_scsi_release;
+	vs->dev.clear_vq_signaled = my_vhost_scsi_clear_signaled;
 
     ret = vhost_dev_init_(&vs->dev, vhost_priv, 0);
     if (ret < 0) {

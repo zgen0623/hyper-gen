@@ -1628,7 +1628,7 @@ my_vhost_scsi_ioctl(void *opaque,
 }
 EXPORT_SYMBOL_GPL(my_vhost_scsi_ioctl);
 
-void my_vhost_clear_signaled(void *opaque, int vq_idx)
+void my_vhost_scsi_clear_signaled(void *opaque, int vq_idx)
 {
 	struct vhost_scsi *vs = opaque;
 	struct vhost_dev *d = &vs->dev;
@@ -1637,7 +1637,6 @@ void my_vhost_clear_signaled(void *opaque, int vq_idx)
 
 	atomic_set(&vq->signaled, 0);
 }
-EXPORT_SYMBOL_GPL(my_vhost_clear_signaled);
 
 
 #ifdef CONFIG_COMPAT

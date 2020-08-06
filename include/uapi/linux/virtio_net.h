@@ -76,6 +76,17 @@ struct virtio_net_config {
 	__u16 max_virtqueue_pairs;
 	/* Default maximum transmit unit advice */
 	__u16 mtu;
+    /*
+     * speed, in units of 1Mb. All values 0 to INT_MAX are legal.
+     * Any other value stands for unknown.
+     */
+    __u32 speed;
+    /*
+     * 0x00 - half duplex
+     * 0x01 - full duplex
+     * Any other value stands for unknown.
+     */
+    __u8 duplex;
 } __attribute__((packed));
 
 /*

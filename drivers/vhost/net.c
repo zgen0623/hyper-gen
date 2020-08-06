@@ -35,6 +35,8 @@
 
 #include "vhost.h"
 
+unsigned int my_tun_alloc_notify(wait_queue_entry_t *wait, void *priv, void **ret);
+
 static int experimental_zcopytx = 0;
 module_param(experimental_zcopytx, int, 0444);
 MODULE_PARM_DESC(experimental_zcopytx, "Enable Zero Copy TX;"
@@ -116,6 +118,7 @@ struct vhost_net_virtqueue {
 	struct vhost_net_ubuf_ref *ubufs;
 	struct skb_array *rx_array;
 	struct vhost_net_buf rxq;
+	void *tun_priv;
 };
 
 struct vhost_net {
@@ -283,6 +286,7 @@ static void vhost_net_vq_reset(struct vhost_net *n)
 		n->vqs[i].ubufs = NULL;
 		n->vqs[i].vhost_hlen = 0;
 		n->vqs[i].sock_hlen = 0;
+		n->vqs[i].tun_priv = NULL;
 		vhost_net_buf_init(&n->vqs[i].rxq);
 	}
 
@@ -385,6 +389,7 @@ static bool vhost_can_busy_poll(unsigned long endtime)
 		      !signal_pending(current));
 }
 
+#if 1
 static void vhost_net_disable_vq(struct vhost_net *n,
 				 struct vhost_virtqueue *vq)
 {
@@ -393,9 +398,33 @@ static void vhost_net_disable_vq(struct vhost_net *n,
 	struct vhost_poll *poll = n->poll + (nvq - n->vqs);
 	if (!vq->private_data)
 		return;
+
 	vhost_poll_stop(poll);
 }
+#endif
 
+static void my_vhost_net_disable_vq(struct vhost_net *n,
+				 struct vhost_virtqueue *vq)
+{
+	struct vhost_net_virtqueue *nvq =
+		container_of(vq, struct vhost_net_virtqueue, vq);
+	struct vhost_poll *poll = n->poll + (nvq - n->vqs);
+	struct socket *sock;
+	wait_queue_head_t *head;
+
+	sock = vq->private_data;
+	if (!sock || !nvq->tun_priv)
+		return;
+
+#if 0
+	head = nvq->tun_priv;
+
+	remove_wait_queue(head, &poll->wait);
+	nvq->tun_priv = NULL;
+#endif
+}
+
+#if 1
 static int vhost_net_enable_vq(struct vhost_net *n,
 				struct vhost_virtqueue *vq)
 {
@@ -408,7 +437,51 @@ static int vhost_net_enable_vq(struct vhost_net *n,
 	if (!sock)
 		return 0;
 
+#if 0
+	if (poll->wqh)
+		return 0;
+
+	mask = file->f_op->poll(file, &poll->table);
+	if (mask)
+		vhost_poll_wakeup(&poll->wait, 0, 0, (void *)mask);
+
+	if (mask & POLLERR) {
+		vhost_poll_stop(poll);
+		ret = -EINVAL;
+	}
+#endif
 	return vhost_poll_start(poll, sock->file);
+}
+#endif
+
+static int my_vhost_net_enable_vq(struct vhost_net *n,
+				struct vhost_virtqueue *vq)
+{
+	int ret = 0;
+	struct vhost_net_virtqueue *nvq =
+		container_of(vq, struct vhost_net_virtqueue, vq);
+	struct vhost_poll *poll = n->poll + (nvq - n->vqs);
+	struct socket *sock;
+	unsigned int mask = 0;
+
+	sock = vq->private_data;
+	if (!sock || nvq->tun_priv)
+		return 0;
+
+	mask = my_tun_alloc_notify(&poll->wait, sock, &nvq->tun_priv);
+
+	if (mask)
+		vhost_poll_queue(poll);
+
+	if (mask & POLLERR) {
+		wait_queue_head_t *head;
+		head = nvq->tun_priv;
+		remove_wait_queue(head, &poll->wait);
+		nvq->tun_priv = NULL;
+		ret = -EINVAL;
+	}
+
+	return ret;
 }
 
 static int vhost_net_tx_get_vq_desc(struct vhost_net *net,
@@ -482,7 +555,7 @@ static void handle_tx(struct vhost_net *net)
 		goto out;
 
 	vhost_disable_notify(&net->dev, vq);
-	vhost_net_disable_vq(net, vq);
+	my_vhost_net_disable_vq(net, vq);
 
 	hdr_size = nvq->vhost_hlen;
 	zcopy = nvq->ubufs;
@@ -571,7 +644,7 @@ static void handle_tx(struct vhost_net *net)
 					% UIO_MAXIOV;
 			}
 			vhost_discard_vq_desc(vq, 1);
-			vhost_net_enable_vq(net, vq);
+			my_vhost_net_enable_vq(net, vq);
 			break;
 		}
 		if (err != len)
@@ -772,7 +845,7 @@ static void handle_rx(struct vhost_net *net)
 		goto out;
 
 	vhost_disable_notify(&net->dev, vq);
-	vhost_net_disable_vq(net, vq);
+	my_vhost_net_disable_vq(net, vq);
 
 	vhost_hlen = nvq->vhost_hlen;
 	sock_hlen = nvq->sock_hlen;
@@ -868,7 +941,7 @@ static void handle_rx(struct vhost_net *net)
 		total_len += vhost_len;
 	} while (likely(!vhost_exceeds_weight(vq, ++recv_pkts, total_len)));
 
-	vhost_net_enable_vq(net, vq);
+	my_vhost_net_enable_vq(net, vq);
 out:
 	mutex_unlock(&vq->mutex);
 }
@@ -966,11 +1039,11 @@ void *my_vhost_net_open(void)
 
 	n = kvmalloc(sizeof *n, GFP_KERNEL | __GFP_RETRY_MAYFAIL);
 	if (!n)
-		return -ENOMEM;
+		return NULL;
 	vqs = kmalloc(VHOST_NET_VQ_MAX * sizeof(*vqs), GFP_KERNEL);
 	if (!vqs) {
 		kvfree(n);
-		return -ENOMEM;
+		return NULL;
 	}
 
 	queue = kmalloc_array(VHOST_RX_BATCH, sizeof(struct sk_buff *),
@@ -978,7 +1051,7 @@ void *my_vhost_net_open(void)
 	if (!queue) {
 		kfree(vqs);
 		kvfree(n);
-		return -ENOMEM;
+		return NULL;
 	}
 	n->vqs[VHOST_NET_VQ_RX].rxq.queue = queue;
 
@@ -1014,7 +1087,7 @@ static struct socket *vhost_net_stop_vq(struct vhost_net *n,
 
 	mutex_lock(&vq->mutex);
 	sock = vq->private_data;
-	vhost_net_disable_vq(n, vq);
+	my_vhost_net_disable_vq(n, vq);
 	vq->private_data = NULL;
 	vhost_net_buf_unproduce(nvq);
 	mutex_unlock(&vq->mutex);
@@ -1054,6 +1127,32 @@ static void vhost_net_flush(struct vhost_net *n)
 static int vhost_net_release(struct inode *inode, struct file *f)
 {
 	struct vhost_net *n = f->private_data;
+	struct socket *tx_sock;
+	struct socket *rx_sock;
+
+	vhost_net_stop(n, &tx_sock, &rx_sock);
+	vhost_net_flush(n);
+	vhost_dev_stop(&n->dev);
+	vhost_dev_cleanup(&n->dev, false);
+	vhost_net_vq_reset(n);
+	if (tx_sock)
+		sockfd_put(tx_sock);
+	if (rx_sock)
+		sockfd_put(rx_sock);
+	/* Make sure no callbacks are outstanding */
+	synchronize_rcu_bh();
+	/* We do an extra flush before freeing memory,
+	 * since jobs can re-queue themselves. */
+	vhost_net_flush(n);
+	kfree(n->vqs[VHOST_NET_VQ_RX].rxq.queue);
+	kfree(n->dev.vqs);
+	kvfree(n);
+	return 0;
+}
+
+int my_vhost_net_release(void *priv)
+{
+	struct vhost_net *n = priv;
 	struct socket *tx_sock;
 	struct socket *rx_sock;
 
@@ -1150,6 +1249,117 @@ static struct socket *get_socket(int fd)
 	if (!IS_ERR(sock))
 		return sock;
 	return ERR_PTR(-ENOTSOCK);
+}
+
+struct socket *my_tun_get_socket(void *tap_priv);
+struct skb_array *my_tun_get_skb_array(void *tap_priv);
+
+void my_vhost_net_clear_signaled(void *opaque, int vq_idx)
+{
+	struct vhost_net *vn = opaque;
+	struct vhost_dev *d = &vn->dev;
+	struct vhost_virtqueue *vq;
+	vq = d->vqs[vq_idx];
+
+	atomic_set(&vq->signaled, 0);
+}
+
+static long my_vhost_net_set_backend(struct vhost_net *n, unsigned index,
+							uint64_t tap_priv)
+{
+	struct socket *sock, *oldsock;
+	struct vhost_virtqueue *vq;
+	struct vhost_net_virtqueue *nvq;
+	struct vhost_net_ubuf_ref *ubufs, *oldubufs = NULL;
+	int r;
+
+	mutex_lock(&n->dev.mutex);
+	r = vhost_dev_check_owner(&n->dev);
+	if (r)
+		goto err;
+
+	if (index >= VHOST_NET_VQ_MAX) {
+		r = -ENOBUFS;
+		goto err;
+	}
+	vq = &n->vqs[index].vq;
+	nvq = &n->vqs[index];
+	mutex_lock(&vq->mutex);
+
+	/* Verify that ring has been setup correctly. */
+	if (!vhost_vq_access_ok(vq)) {
+		r = -EFAULT;
+		goto err_vq;
+	}
+
+	sock = my_tun_get_socket((void*)tap_priv);
+	if (!sock) {
+		r = -1;
+		goto err_vq;
+	}
+
+	/* start polling new socket */
+	oldsock = vq->private_data;
+	if (sock != oldsock) {
+		ubufs = vhost_net_ubuf_alloc(vq,
+					     sock && vhost_sock_zcopy(sock));
+		if (IS_ERR(ubufs)) {
+			r = PTR_ERR(ubufs);
+			goto err_ubufs;
+		}
+
+		my_vhost_net_disable_vq(n, vq);
+		vq->private_data = sock;
+		vhost_net_buf_unproduce(nvq);
+		if (index == VHOST_NET_VQ_RX)
+			nvq->rx_array = my_tun_get_skb_array((void*)tap_priv);
+
+		r = vhost_vq_init_access(vq);
+		if (r)
+			goto err_used;
+
+		r = my_vhost_net_enable_vq(n, vq);
+		if (r)
+			goto err_used;
+
+		oldubufs = nvq->ubufs;
+		nvq->ubufs = ubufs;
+
+		n->tx_packets = 0;
+		n->tx_zcopy_err = 0;
+		n->tx_flush = false;
+	}
+
+	mutex_unlock(&vq->mutex);
+
+	if (oldubufs) {
+		vhost_net_ubuf_put_wait_and_free(oldubufs);
+		mutex_lock(&vq->mutex);
+		vhost_zerocopy_signal_used(n, vq);
+		mutex_unlock(&vq->mutex);
+	}
+
+	if (oldsock) {
+		vhost_net_flush_vq(n, index);
+		sockfd_put(oldsock);
+	}
+
+	mutex_unlock(&n->dev.mutex);
+	return 0;
+
+err_used:
+	vq->private_data = oldsock;
+	my_vhost_net_enable_vq(n, vq);
+	if (ubufs)
+		vhost_net_ubuf_put_wait_and_free(ubufs);
+err_ubufs:
+	if (sock)
+		sockfd_put(sock);
+err_vq:
+	mutex_unlock(&vq->mutex);
+err:
+	mutex_unlock(&n->dev.mutex);
+	return r;
 }
 
 static long vhost_net_set_backend(struct vhost_net *n, unsigned index, int fd)
@@ -1377,6 +1587,51 @@ static long vhost_net_ioctl(struct file *f, unsigned int ioctl,
 			r = vhost_vring_ioctl(&n->dev, ioctl, argp);
 		else
 			vhost_net_flush(n);
+		mutex_unlock(&n->dev.mutex);
+		return r;
+	}
+}
+
+long my_vhost_dev_ioctl(struct vhost_dev *d, unsigned int ioctl, void *argp);
+long my_vhost_vring_ioctl(struct vhost_dev *d, int ioctl, void *argp);
+
+
+long my_vhost_net_ioctl(void *priv, unsigned int ioctl,
+			    unsigned long arg)
+{
+	struct vhost_net *n = priv;
+	void *argp = (void *)arg;
+	u64 *featurep = argp;
+	struct vhost_vring_file *backend;
+	u64 features;
+	int r;
+
+	switch (ioctl) {
+	case VHOST_NET_SET_BACKEND:
+		backend = argp;
+		return my_vhost_net_set_backend(n, backend->index, backend->tap_priv);
+	case VHOST_GET_FEATURES:
+		features = VHOST_NET_FEATURES;
+		*featurep = features;
+		return 0;
+	case VHOST_SET_FEATURES:
+		features = *featurep;
+		if (features & ~VHOST_NET_FEATURES)
+			return -EOPNOTSUPP;
+
+		return vhost_net_set_features(n, features);
+	case VHOST_RESET_OWNER:
+		return vhost_net_reset_owner(n);
+	case VHOST_SET_OWNER:
+		return vhost_net_set_owner(n);
+	default:
+		mutex_lock(&n->dev.mutex);
+		r = my_vhost_dev_ioctl(&n->dev, ioctl, argp);
+		if (r == -ENOIOCTLCMD)
+			r = my_vhost_vring_ioctl(&n->dev, ioctl, argp);
+		else
+			vhost_net_flush(n);
+
 		mutex_unlock(&n->dev.mutex);
 		return r;
 	}

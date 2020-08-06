@@ -33,6 +33,7 @@
 #include "machine.h"
 #include "vpci.h"
 #include "vblk.h"
+#include "vnet.h"
 
 #define GSI_COUNT 4095
 
@@ -656,7 +657,7 @@ void init_virt_machine(struct kvm_vcpu *vcpu)
 
 	create_vpci(vcpu->kvm);
 	create_vblk(vcpu->kvm);
-//	create_vnet(vcpu->kvm);
+	create_vnet(vcpu->kvm);
 }
 
 int create_virt_machine(struct kvm *kvm)
@@ -723,7 +724,7 @@ void destroy_virt_machine(struct kvm *kvm)
 	vfree(kvm->possible_cpus);
 
 	destroy_vblk(kvm);
-//	destroy_vnet(kvm);
+	destroy_vnet(kvm);
 	destroy_vpci(kvm);
 
 	kfree(kvm->irq_routes);

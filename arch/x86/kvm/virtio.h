@@ -3,6 +3,12 @@
 
 #include "vpci.h"
 
+#define QEMU_ALIGN_DOWN(n, m) ((n) / (m) * (m)) 
+
+/* Round number up to multiple. Safe when m is not a power of 2 (see
+ * ROUND_UP for a faster version when a power of 2 is guaranteed) */
+#define QEMU_ALIGN_UP(n, m) QEMU_ALIGN_DOWN((n) + (m) - 1, (m))
+
 #define VIRTIO_PCI_VRING_ALIGN         4096
 #define VIRTQUEUE_MAX_SIZE 1024
 
@@ -125,8 +131,7 @@ typedef struct VRing
 } VRing;
 
 
-struct VirtQueue
-{
+struct VirtQueue {
     VRing vring;
     VirtQueueElement *used_elems;
 	uint64_t desc_hva;
@@ -168,8 +173,7 @@ struct VirtQueue
     QLIST_ENTRY(VirtQueue) node;
 };
 
-struct VirtIODevice
-{
+struct VirtIODevice {
     PCIDevice pci_dev;
     uint8_t status;
 	char *name;
@@ -187,7 +191,6 @@ struct VirtIODevice
     uint32_t generation;
     VirtQueue *vq;
     uint16_t device_id;
-    bool vm_running;
     bool broken; /* device in invalid state, needs reset */
     bool start_on_kick; /* when virtio 1.0 feature has not been negotiated */
 	QLIST_HEAD(, VirtQueue) *vector_queues;
@@ -265,6 +268,7 @@ struct vhost_dev {
     long (*ioctl_hook)(void *, unsigned int,
 					unsigned long);
 	int (*release_hook)(void *);
+	void (*clear_vq_signaled)(void *opaque, int vq_idx);
 };
 
 
@@ -314,6 +318,12 @@ struct evt_node {
 	struct list_head  list;
 	VirtQueue *vq;
 };
+
+typedef struct VirtIOFeature {
+    uint64_t flags;
+    size_t end;
+} VirtIOFeature;
+
 
 uint64_t vhost_get_features(struct vhost_dev *hdev, const int *feature_bits,
                             uint64_t features);
@@ -430,5 +440,13 @@ struct kvm *find_kvm_by_id(uint64_t kvm_id);
 int virtio_set_status(VirtIODevice *vdev, uint8_t val);
 
 void virtio_cleanup_(VirtIODevice *vdev);
+void vhost_ack_features(struct vhost_dev *hdev, const int *feature_bits,
+                        uint64_t features);
+int virtio_get_num_queues(VirtIODevice *vdev);
 
+bool virtio_queue_enabled(VirtIODevice *vdev, int n);
+size_t virtio_feature_get_config_size(VirtIOFeature *feature_sizes,
+                                      uint64_t host_features);
+void vhost_dev_cleanup_(struct vhost_dev *hdev);
+void virtio_notify_vector(VirtIODevice *vdev, uint16_t vector);
 #endif
