@@ -268,8 +268,10 @@ static int vhost_virtqueue_start(struct vhost_dev *dev,
     struct VirtQueue *vvq = virtio_get_queue(vdev, idx);
 
     a = virtio_queue_get_desc_addr(vdev, idx);
-    if (a == 0)
+    if (a == 0) {
+    	printk(">>>>>%s:%d\n", __func__, __LINE__);
         return 0;
+	}
 
     vq->num = state.num = virtio_queue_get_num(vdev, idx);
     r = dev->ioctl_hook(dev->opaque, VHOST_SET_VRING_NUM, (uint64_t)&state);
@@ -321,8 +323,11 @@ static int vhost_virtqueue_start(struct vhost_dev *dev,
     vq->used = (void *)ghc.hva;
 
     r = vhost_virtqueue_set_addr(dev, vq, vhost_vq_index);
-    if (r < 0)
+    if (r < 0) {
+        r = -ENOMEM;
+        printk(">>>>>%s:%d\n", __func__, __LINE__);
         goto out;
+	}
 
 	//deliver evt_id for guest=>host notify event to vhost side
     file.fd = 1;
@@ -515,6 +520,7 @@ int vhost_dev_start(struct vhost_dev *hdev, VirtIODevice *vdev)
 		printk(">>>>>error: fail to get ram hva %s:%d\n", __func__, __LINE__);
 	}
 
+  //  printk(">>>>>%s:%d %d %d\n", __func__, __LINE__, hdev->nvqs, hdev->vq_index);
 
     for (i = 0; i < hdev->nvqs; ++i) {
         r = vhost_virtqueue_start(hdev,
@@ -1362,6 +1368,8 @@ static uint64_t virtio_pci_device_read(VirtIODevice *vdev, hwaddr addr,
 {
     uint64_t val = 0;
 
+		printk(">>>>>%s:%d\n", __func__, __LINE__);
+
     switch (size) {
     case 1:
         val = virtio_config_readb(vdev, addr);
@@ -1713,6 +1721,7 @@ static void virtio_pci_common_write(VirtIODevice *vdev, hwaddr offset,
         virtio_queue_set_vector(vdev, vdev->queue_sel, val);
         break;
     case VIRTIO_PCI_COMMON_Q_ENABLE:
+		printk(">>>>>>%s:%d q_sel=%d\n",__func__, __LINE__, vdev->queue_sel);
         virtio_queue_set_num(vdev, vdev->queue_sel,
                              vdev->vq[vdev->queue_sel].vq_config_buf.num);
         virtio_queue_set_rings(vdev, vdev->queue_sel,

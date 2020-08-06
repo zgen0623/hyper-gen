@@ -1452,7 +1452,7 @@ long vhost_vring_ioctl(struct vhost_dev *d, int ioctl, void __user *argp)
 			}
 		}
 
-#if 1
+#if 0
 		printk(">>>>>>%s:%d [%d] fd=%d prev_fd=%d evt=%d poll=%d\n",__func__, __LINE__,
 			idx, f.fd, vq->notify_status, f.evt_id, pollstart);
 #endif
@@ -1640,7 +1640,9 @@ long my_vhost_vring_ioctl(struct vhost_dev *d, int ioctl, void *argp)
 		vq->evt_id = f->evt_id;
 		vq->kvm_id = f->kvm_id;
 
-//		printk(">>>>>>%s:%d [%d] fd=%d evt_id=%d kvm_id=%d\n",__func__, __LINE__,idx, f->fd, f->evt_id, f->kvm_id);
+		printk(">>>>>>%s:%d [%d] fd=%d prev_fd=%d evt=%d poll=%d\n",__func__, __LINE__,
+			idx, f->fd, vq->notify_status, f->evt_id, pollstart);
+
 		vq->poll.evt_id = f->evt_id;
 
 		if (pollstart && vq->handle_kick)
