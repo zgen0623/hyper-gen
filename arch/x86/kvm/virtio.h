@@ -10,13 +10,14 @@
 #define QEMU_ALIGN_UP(n, m) QEMU_ALIGN_DOWN((n) + (m) - 1, (m))
 
 #define VIRTIO_PCI_VRING_ALIGN         4096
-#define VIRTQUEUE_MAX_SIZE 1024
+#define VIRTQUEUE_MAX_SIZE  1024
 
 #define REGION_SIZE              0x1000
+
 #define MODERN_BAR_COMMON_OFFSET 0x0
 #define MODERN_BAR_ISR_OFFSET    0x1000
 #define MODERN_BAR_DEVICE_OFFSET 0x2000
-#define MODERN_BAR_NOTIFY_OFFSET 0x2000
+#define MODERN_BAR_NOTIFY_OFFSET 0x3000
 
 #define VIRTIO_F_RING_PACKED        34
 
@@ -445,8 +446,6 @@ void vhost_ack_features(struct vhost_dev *hdev, const int *feature_bits,
 int virtio_get_num_queues(VirtIODevice *vdev);
 
 bool virtio_queue_enabled(VirtIODevice *vdev, int n);
-size_t virtio_feature_get_config_size(VirtIOFeature *feature_sizes,
-                                      uint64_t host_features);
 void vhost_dev_cleanup_(struct vhost_dev *hdev);
 void virtio_notify_vector(VirtIODevice *vdev, uint16_t vector);
 #endif

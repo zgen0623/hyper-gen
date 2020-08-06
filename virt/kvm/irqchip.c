@@ -120,7 +120,6 @@ void *vhost_alloc_irq_entry_kvm(uint64_t kvm_id, int virq)
 	struct kvm_kernel_irq_routing_entry entries[KVM_NR_IRQCHIPS];
 	int n_entries = kvm_irq_map_gsi(kvm, entries, virq);
 
-	
 	printk(">>>>>>%s:%d gsi=%d n=%d\n", __func__, __LINE__, virq, n_entries);
 
 	if (n_entries == 1)

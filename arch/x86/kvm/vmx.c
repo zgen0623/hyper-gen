@@ -4571,6 +4571,7 @@ static int get_ept_level(struct kvm_vcpu *vcpu)
 	/* Nested EPT currently only supports 4-level walks. */
 	if (is_guest_mode(vcpu) && nested_cpu_has_ept(get_vmcs12(vcpu)))
 		return 4;
+
 	if (cpu_has_vmx_ept_5levels() && (cpuid_maxphyaddr(vcpu) > 48))
 		return 5;
 	return 4;
@@ -5085,6 +5086,7 @@ static int init_rmode_identity_map(struct kvm *kvm)
 
 	if (!kvm->arch.ept_identity_map_addr)
 		kvm->arch.ept_identity_map_addr = VMX_EPT_IDENTITY_PAGETABLE_ADDR;
+
 	identity_map_pfn = kvm->arch.ept_identity_map_addr >> PAGE_SHIFT;
 
 	r = __x86_set_memory_region(kvm, IDENTITY_PAGETABLE_PRIVATE_MEMSLOT,
@@ -5096,10 +5098,12 @@ static int init_rmode_identity_map(struct kvm *kvm)
 	r = kvm_clear_guest_page(kvm, identity_map_pfn, 0, PAGE_SIZE);
 	if (r < 0)
 		goto out;
+
 	/* Set up identity-mapping pagetable for EPT in real mode */
 	for (i = 0; i < PT32_ENT_PER_PAGE; i++) {
 		tmp = (i << 22) + (_PAGE_PRESENT | _PAGE_RW | _PAGE_USER |
 			_PAGE_ACCESSED | _PAGE_DIRTY | _PAGE_PSE);
+
 		r = kvm_write_guest_page(kvm, identity_map_pfn,
 				&tmp, i * sizeof(tmp), sizeof(tmp));
 		if (r < 0)
@@ -6178,6 +6182,7 @@ static int vmx_set_tss_addr(struct kvm *kvm, unsigned int addr)
 				    PAGE_SIZE * 3);
 	if (ret)
 		return ret;
+
 	kvm->arch.tss_addr = addr;
 	return init_rmode_tss(kvm);
 }

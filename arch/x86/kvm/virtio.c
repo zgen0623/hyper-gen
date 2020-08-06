@@ -68,19 +68,6 @@ static uint16_t virtio_get_queue_index(VirtQueue *vq)
 
 
 
-size_t virtio_feature_get_config_size(VirtIOFeature *feature_sizes,
-                                      uint64_t host_features)
-{   
-    size_t config_size = 0;
-    int i;
-                                                    
-    for (i = 0; feature_sizes[i].flags != 0; i++)
-        if (host_features & feature_sizes[i].flags)
-            config_size = MAX(feature_sizes[i].end, config_size);
-    
-    return config_size;
-}
-
 bool virtio_queue_enabled(VirtIODevice *vdev, int n)
 {   
     return virtio_queue_get_desc_addr(vdev, n) != 0;
@@ -1321,28 +1308,30 @@ static int virtio_pci_isr_read(void *opaque, hwaddr offset,
     return val;
 }
 
-static uint32_t virtio_config_readb(VirtIODevice *vdev, uint32_t addr)
+static uint8_t virtio_config_readb(VirtIODevice *vdev, uint32_t addr)
 {       
-    uint8_t val;
+    uint8_t val = 0;
     
     if (addr + sizeof(val) > vdev->config_len)
         return (uint32_t)-1;
     
-    vdev->get_config(vdev, vdev->config);
+    if (vdev->get_config)
+    	vdev->get_config(vdev, vdev->config);
 
     val = *(uint8_t*)(vdev->config + addr);
 
     return val;                     
 }
 
-static uint32_t virtio_config_readw(VirtIODevice *vdev, uint32_t addr)
+static uint16_t virtio_config_readw(VirtIODevice *vdev, uint32_t addr)
 {   
-    uint16_t val;
+    uint16_t val = 0;
 
     if (addr + sizeof(val) > vdev->config_len)
         return (uint32_t)-1;
 
-    vdev->get_config(vdev, vdev->config);
+    if (vdev->get_config)
+    	vdev->get_config(vdev, vdev->config);
 
     val = *(uint16_t*)(vdev->config + addr);
 
@@ -1351,37 +1340,34 @@ static uint32_t virtio_config_readw(VirtIODevice *vdev, uint32_t addr)
 
 static uint32_t virtio_config_readl(VirtIODevice *vdev, uint32_t addr)
 {
-    uint32_t val;
+    uint32_t val = 0;
 
     if (addr + sizeof(val) > vdev->config_len)
         return (uint32_t)-1;
 
-    vdev->get_config(vdev, vdev->config);
+    if (vdev->get_config)
+    	vdev->get_config(vdev, vdev->config);
 
     val = *(uint32_t*)(vdev->config + addr);
 
     return val;
 }
 
-static uint64_t virtio_pci_device_read(VirtIODevice *vdev, hwaddr addr,
-                                       unsigned size)
+static void virtio_pci_device_read(VirtIODevice *vdev, hwaddr addr,
+                                       const void *val, unsigned size)
 {
-    uint64_t val = 0;
-
-		printk(">>>>>%s:%d\n", __func__, __LINE__);
 
     switch (size) {
     case 1:
-        val = virtio_config_readb(vdev, addr);
+        *(uint8_t*)val = virtio_config_readb(vdev, addr);
         break;
     case 2:
-        val = virtio_config_readw(vdev, addr);
+        *(uint16_t*)val = virtio_config_readw(vdev, addr);
         break;
     case 4:
-        val = virtio_config_readl(vdev, addr);
+        *(uint32_t*)val = virtio_config_readl(vdev, addr);
         break;
     }
-    return val;
 }
 
 static void _modern_bar_read(VirtIODevice *vdev, hwaddr offset,
@@ -1399,8 +1385,8 @@ static void _modern_bar_read(VirtIODevice *vdev, hwaddr offset,
 	} else if (offset >= MODERN_BAR_DEVICE_OFFSET &&
 		offset < MODERN_BAR_NOTIFY_OFFSET) {
 		//read device private region
-		*(uint64_t*)val = virtio_pci_device_read(vdev,
-							offset - MODERN_BAR_DEVICE_OFFSET, len);
+		virtio_pci_device_read(vdev,
+							offset - MODERN_BAR_DEVICE_OFFSET, val, len);
 	} else if (offset >= MODERN_BAR_NOTIFY_OFFSET) {
 		//read notify region
 		*(uint64_t*)val = 0;
@@ -1721,7 +1707,6 @@ static void virtio_pci_common_write(VirtIODevice *vdev, hwaddr offset,
         virtio_queue_set_vector(vdev, vdev->queue_sel, val);
         break;
     case VIRTIO_PCI_COMMON_Q_ENABLE:
-		printk(">>>>>>%s:%d q_sel=%d\n",__func__, __LINE__, vdev->queue_sel);
         virtio_queue_set_num(vdev, vdev->queue_sel,
                              vdev->vq[vdev->queue_sel].vq_config_buf.num);
         virtio_queue_set_rings(vdev, vdev->queue_sel,

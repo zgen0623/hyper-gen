@@ -91,6 +91,7 @@ int my_set_offload(void *tap_priv, unsigned offload);
 int my_tun_set_queue(void *priv, struct ifreq *ifr);
 static void virtio_net_add_queue(VirtIONet *n, int index);
 
+#if 0
 static VirtIOFeature feature_sizes[] = {
     {.flags = 1ULL << VIRTIO_NET_F_MAC,
      .end = endof(struct virtio_net_config, mac)},
@@ -105,13 +106,30 @@ static VirtIOFeature feature_sizes[] = {
     {}
 };
 
+static size_t virtio_feature_get_config_size(VirtIOFeature *feature_sizes,
+                                      uint64_t host_features)
+{   
+    size_t config_size = 0;
+    int i;
+                                                    
+    for (i = 0; feature_sizes[i].flags != 0; i++)
+        if (host_features & feature_sizes[i].flags)
+            config_size = MAX(feature_sizes[i].end, config_size);
+    
+    return config_size;
+}
+#endif
+
+
 static void virtio_net_set_config_size(VirtIONet *n, uint64_t host_features)
 {
     virtio_add_feature(&host_features, VIRTIO_NET_F_MAC);
 
+#if 0
     n->config_size =
 		virtio_feature_get_config_size(feature_sizes,
                                        host_features);
+#endif
 }
 
 static int mac_table[256] = {0};
@@ -215,6 +233,7 @@ static void virtio_net_device_realize(VirtIODevice *vdev)
 
     //create control vq
     virtio_add_queue(vdev, 64, virtio_net_handle_ctrl);
+ //   virtio_add_queue(vdev, 64, NULL);
 
     qemu_macaddr_default_if_unset(&n->macaddr);
     memcpy(&n->mac[0], &n->macaddr, sizeof(n->mac));
@@ -353,11 +372,6 @@ static const int kernel_feature_bits[] = {
     VHOST_INVALID_FEATURE_BIT
 };
 
-static uint64_t vhost_net_get_acked_features(NetClientState *nc)
-{   
-    return nc->dev.acked_features;
-}
-
 static void vhost_net_ack_features(NetClientState *nc, uint64_t features)
 {
     nc->dev.acked_features = nc->dev.backend_features;
@@ -435,12 +449,9 @@ static void virtio_net_get_config(VirtIODevice *vdev, uint8_t *config)
 {   
     VirtIONet *n = (VirtIONet *)(vdev);
     struct virtio_net_config netcfg;
-    
+
     netcfg.status = n->status;
     netcfg.max_virtqueue_pairs = n->max_queues;
-
-printk(">>>>>>%s:%d max_queues=%d\n", __func__, __LINE__, n->max_queues);
-
     netcfg.mtu = n->net_conf.mtu;
     memcpy(netcfg.mac, n->mac, ETH_ALEN);
     netcfg.speed = n->net_conf.speed;
@@ -454,8 +465,6 @@ static void virtio_net_set_config(VirtIODevice *vdev, const uint8_t *config)
     VirtIONet *n = (VirtIONet *)(vdev);
     struct virtio_net_config netcfg = {};
 
-	printk(">>>>>>%s:%d\n", __func__, __LINE__);
-    
     memcpy(&netcfg, config, n->config_size);
     
     if (!virtio_vdev_has_feature(vdev, VIRTIO_NET_F_CTRL_MAC_ADDR) &&
@@ -470,8 +479,6 @@ static uint64_t virtio_net_get_features(VirtIODevice *vdev, uint64_t features)
     VirtIONet *n = (VirtIONet *)(vdev);
     NetClientState *nc = n->my_sub_ncs[0];
 
-	printk(">>>>>>%s:%d\n", __func__, __LINE__);
-    
     /* Firstly sync all virtio-net possible supported features */
     features |= n->host_features;
     
@@ -601,21 +608,16 @@ static bool virtqueue_map_desc(VirtIODevice *vdev, unsigned int *p_num_sg,
       	printk(">>>>>%s:%d\n", __func__, __LINE__);
         goto out;
 	}
+
+//    printk(">>>>>%s:%d %lx %lx %d\n", __func__, __LINE__, iov, addr, num_sg);
+
 #if 0
-        iov[num_sg].iov_base = dma_memory_map(&address_space_memory, pa, &len,
-                                              is_write ?
-                                              DMA_DIRECTION_FROM_DEVICE :
-                                              DMA_DIRECTION_TO_DEVICE);
-        if (!iov[num_sg].iov_base) {
-        	printk(">>>>>%s:%d\n", __func__, __LINE__);
-            goto out;
-        }
-#endif
 	iov[num_sg].iov_base = (void*)ghc.hva;
     iov[num_sg].iov_len = sz;
     addr[num_sg] = pa;
 
     num_sg++;
+#endif
 
     ok = true;
 
@@ -649,14 +651,14 @@ static int virtqueue_packed_read_next_desc(VirtQueue *vq,
     return VIRTQUEUE_READ_DESC_MORE;
 }
 
-static void *virtqueue_alloc_element(size_t sz, unsigned out_num, unsigned in_num)
+static void *virtqueue_alloc_element(unsigned out_num, unsigned in_num)
 {
     VirtQueueElement *elem;
 
-    size_t in_addr_ofs = QEMU_ALIGN_UP(sz, __alignof__(elem->in_addr[0]));
+    size_t in_addr_ofs = ALIGN_UP(sizeof(VirtQueueElement), __alignof__(elem->in_addr[0]));
     size_t out_addr_ofs = in_addr_ofs + in_num * sizeof(elem->in_addr[0]);
     size_t out_addr_end = out_addr_ofs + out_num * sizeof(elem->out_addr[0]);
-    size_t in_sg_ofs = QEMU_ALIGN_UP(out_addr_end, __alignof__(elem->in_sg[0]));
+    size_t in_sg_ofs = ALIGN_UP(out_addr_end, __alignof__(elem->in_sg[0]));
     size_t out_sg_ofs = in_sg_ofs + in_num * sizeof(elem->in_sg[0]);
     size_t out_sg_end = out_sg_ofs + out_num * sizeof(elem->out_sg[0]);
 
@@ -673,25 +675,22 @@ static void *virtqueue_alloc_element(size_t sz, unsigned out_num, unsigned in_nu
 }
 
 
-static void *virtqueue_packed_pop(VirtQueue *vq, size_t sz)
+static void *virtqueue_packed_pop(VirtQueue *vq)
 {
     unsigned int i, max;
- //   VRingMemoryRegionCaches *caches;
-  //  MemoryRegionCache indirect_desc_cache = MEMORY_REGION_CACHE_INVALID;
- //   MemoryRegionCache *desc_cache;
     VirtIODevice *vdev = vq->vdev;
 	struct kvm *kvm = vdev->pci_dev.bus->kvm;
     VirtQueueElement *elem = NULL;
     unsigned out_num, in_num, elem_entries;
 
-    hwaddr addr[VIRTQUEUE_MAX_SIZE];
-    struct iovec iov[VIRTQUEUE_MAX_SIZE];
     VRingPackedDesc desc;
     uint16_t id;
     int rc;
 	bool indirect_flag = false;
 	uint64_t hva;
 	struct gfn_to_hva_cache ghc;
+	hwaddr *addr = kmalloc(sizeof(hwaddr) * VIRTQUEUE_MAX_SIZE, GFP_KERNEL);
+	struct iovec *iov = kmalloc(sizeof(struct iovec) * VIRTQUEUE_MAX_SIZE, GFP_KERNEL);
 
     if (virtio_queue_packed_empty_rcu(vq))
         goto done;
@@ -708,15 +707,6 @@ static void *virtqueue_packed_pop(VirtQueue *vq, size_t sz)
 
     i = vq->last_avail_idx;
 
-#if 0
-    caches = vring_get_region_caches(vq);
-    if (caches->desc.len < max * sizeof(VRingDesc)) {
-        virtio_error(vdev, "Cannot map descriptor ring");
-        goto done;
-    }
-#endif
-
- //   desc_cache = &caches->desc;
 	hva = vq->desc_hva;
     vring_packed_desc_read(vdev, &desc, hva, i, true);
 
@@ -729,16 +719,6 @@ static void *virtqueue_packed_pop(VirtQueue *vq, size_t sz)
 
 		indirect_flag = true;
 
-#if 0
-        /* loop over the indirect descriptor table */
-        len = address_space_cache_init(&indirect_desc_cache, &address_space_memory,
-                                       desc.addr, desc.len, false);
-        desc_cache = &indirect_desc_cache;
-        if (len < desc.len) {
-            virtio_error(vdev, "Cannot map indirect buffer");
-            goto done;
-        }
-#endif
 		if (kvm_gfn_to_hva_cache_init(kvm, &ghc, desc.addr, desc.len)) {
 			printk(">>>>>%s:%d\n",__func__,__LINE__);
 			goto done;
@@ -789,7 +769,7 @@ static void *virtqueue_packed_pop(VirtQueue *vq, size_t sz)
 
 
     /* Now copy what we have collected and mapped */
-    elem = virtqueue_alloc_element(sz, out_num, in_num);
+    elem = virtqueue_alloc_element(out_num, in_num);
     for (i = 0; i < out_num; i++) {
         elem->out_addr[i] = addr[i];
         elem->out_sg[i] = iov[i];
@@ -815,6 +795,8 @@ static void *virtqueue_packed_pop(VirtQueue *vq, size_t sz)
 
 done:
 err_undo_map:
+	kfree(iov);
+	kfree(addr);
     return elem;
 }
 
@@ -894,8 +876,6 @@ static bool virtqueue_get_head(VirtQueue *vq, unsigned int idx,
 static void vring_split_desc_read(VirtIODevice *vdev, VRingDesc *desc,
                                   uint64_t desc_hva, int i)
 {
- //   address_space_read_cached(cache, i * sizeof(VRingDesc),
-  //                            desc, sizeof(VRingDesc));
 	memcpy(desc, (void*)(desc_hva + i * sizeof(VRingDesc)),
 			sizeof(VRingDesc));
 #if 0
@@ -929,24 +909,21 @@ static int virtqueue_split_read_next_desc(VirtIODevice *vdev, VRingDesc *desc,
     return VIRTQUEUE_READ_DESC_MORE;
 }
 
-static void *virtqueue_split_pop(VirtQueue *vq, size_t sz)
+static void *virtqueue_split_pop(VirtQueue *vq)
 {
     unsigned int i, head, max;
-//    VRingMemoryRegionCaches *caches;
- //   MemoryRegionCache indirect_desc_cache = MEMORY_REGION_CACHE_INVALID;
-  //  MemoryRegionCache *desc_cache;
     VirtIODevice *vdev = vq->vdev;
 	struct kvm *kvm = vdev->pci_dev.bus->kvm;
     VirtQueueElement *elem = NULL;
     unsigned out_num, in_num, elem_entries;
-    hwaddr addr[VIRTQUEUE_MAX_SIZE];
-    struct iovec iov[VIRTQUEUE_MAX_SIZE];
     VRingDesc desc;
     int rc;
 	uint64_t desc_hva;
 	struct gfn_to_hva_cache ghc;
 
-   // RCU_READ_LOCK_GUARD();
+	hwaddr *addr = kmalloc(sizeof(hwaddr) * VIRTQUEUE_MAX_SIZE, GFP_KERNEL);
+	struct iovec *iov = kmalloc(sizeof(struct iovec) * VIRTQUEUE_MAX_SIZE, GFP_KERNEL);
+
     if (virtio_queue_empty_rcu(vq))
         goto done;
 
@@ -972,15 +949,6 @@ static void *virtqueue_split_pop(VirtQueue *vq, size_t sz)
 
     i = head;
 
-#if 0
-    caches = vring_get_region_caches(vq);
-    if (caches->desc.len < max * sizeof(VRingDesc)) {
-        virtio_error(vdev, "Cannot map descriptor ring");
-        goto done;
-    }
-#endif
-
-  //  desc_cache = &caches->desc;
 	desc_hva = vq->desc_hva;
 
     vring_split_desc_read(vdev, &desc, desc_hva, i);
@@ -991,17 +959,6 @@ static void *virtqueue_split_pop(VirtQueue *vq, size_t sz)
             goto done;
         }
 
-#if 0
-        /* loop over the indirect descriptor table */
-        len = address_space_cache_init(&indirect_desc_cache, &address_space_memory,
-                                       desc.addr, desc.len, false);
-        desc_cache = &indirect_desc_cache;
-        if (len < desc.len) {
-            virtio_error(vdev, "Cannot map indirect buffer");
-            goto done;
-        }
-
-#endif
 		if (kvm_gfn_to_hva_cache_init(kvm, &ghc, desc.addr, desc.len)) {
             printk(">>>>Cannot map indirect buffer %s:%d\n", __func__, __LINE__);
             goto done;
@@ -1012,24 +969,39 @@ static void *virtqueue_split_pop(VirtQueue *vq, size_t sz)
         i = 0;
         vring_split_desc_read(vdev, &desc, desc_hva, i);
     }
+
+
     /* Collect all the descriptors */
     do {
         bool map_ok;
 
         if (desc.flags & VRING_DESC_F_WRITE) {
-            map_ok = virtqueue_map_desc(vdev, &in_num, addr + out_num,
-                                        iov + out_num,
-                                        VIRTQUEUE_MAX_SIZE - out_num, true,
-                                        desc.addr, desc.len);
+    		map_ok = false;
+    		if (desc.len &&
+					in_num < VIRTQUEUE_MAX_SIZE - out_num &&
+					!kvm_gfn_to_hva_cache_init(kvm, &ghc, desc.addr, desc.len)) {
+				iov[out_num + in_num].iov_base = (void*)ghc.hva;
+    			iov[out_num + in_num].iov_len = desc.len;
+    			addr[out_num + in_num] = desc.addr;
+    			in_num++;
+    			map_ok = true;
+    		}
         } else {
             if (in_num) {
-                printk(">>>Incorrect order for descriptors %s:%d\n",
-					__func__, __LINE__);
+                printk(">>>Incorrect order for descriptors %s:%d\n", __func__, __LINE__);
                 goto err_undo_map;
             }
-            map_ok = virtqueue_map_desc(vdev, &out_num, addr, iov,
-                                        VIRTQUEUE_MAX_SIZE, false,
-                                        desc.addr, desc.len);
+
+    		map_ok = false;
+    		if (desc.len &&
+					out_num < VIRTQUEUE_MAX_SIZE &&
+					!kvm_gfn_to_hva_cache_init(kvm, &ghc, desc.addr, desc.len)) {
+				iov[out_num].iov_base = (void*)ghc.hva;
+    			iov[out_num].iov_len = desc.len;
+    			addr[out_num] = desc.addr;
+    			out_num++;
+    			map_ok = true;
+    		}
         }
 
         if (!map_ok)
@@ -1048,11 +1020,12 @@ static void *virtqueue_split_pop(VirtQueue *vq, size_t sz)
     if (rc == VIRTQUEUE_READ_DESC_ERROR)
         goto err_undo_map;
 
-
     /* Now copy what we have collected and mapped */
-    elem = virtqueue_alloc_element(sz, out_num, in_num);
+    elem = virtqueue_alloc_element(out_num, in_num);
+
     elem->index = head;
     elem->ndescs = 1;
+
     for (i = 0; i < out_num; i++) {
         elem->out_addr[i] = addr[i];
         elem->out_sg[i] = iov[i];
@@ -1065,24 +1038,24 @@ static void *virtqueue_split_pop(VirtQueue *vq, size_t sz)
 
     vq->inuse++;
 
+
 done:
 err_undo_map:
+	kfree(iov);
+	kfree(addr);
     return elem;
 }
 
 
-
-
-
-static void *virtqueue_pop(VirtQueue *vq, size_t sz)
+static void *virtqueue_pop(VirtQueue *vq)
 {
     if (unlikely(vq->vdev->broken))
         return NULL;
 
     if (virtio_vdev_has_feature(vq->vdev, VIRTIO_F_RING_PACKED)) {
-        return virtqueue_packed_pop(vq, sz);
+        return virtqueue_packed_pop(vq);
     } else {
-        return virtqueue_split_pop(vq, sz);
+        return virtqueue_split_pop(vq);
     }
 }
 
@@ -1781,13 +1754,12 @@ static void virtio_net_handle_ctrl(VirtIODevice *vdev, VirtQueue *vq)
     unsigned int iov_cnt;
 
     for (;;) {
-        elem = virtqueue_pop(vq, sizeof(VirtQueueElement));
+        elem = virtqueue_pop(vq);
         if (!elem)
             break;
 
         if (iov_size(elem->in_sg, elem->in_num) < sizeof(status) ||
             iov_size(elem->out_sg, elem->out_num) < sizeof(ctrl)) {
-			printk(">>>>>virtio-net ctrl missing headers %s:%d\n", __func__, __LINE__);
             virtqueue_detach_element(vq, elem, 0);
             kfree(elem);
             break;
@@ -1798,7 +1770,6 @@ static void virtio_net_handle_ctrl(VirtIODevice *vdev, VirtQueue *vq)
 
         s = iov_to_buf(iov, iov_cnt, 0, &ctrl, sizeof(ctrl));
         iov_discard_front(&iov, &iov_cnt, sizeof(ctrl));
-
 
         if (s != sizeof(ctrl)) {
             status = VIRTIO_NET_ERR;
@@ -1848,6 +1819,7 @@ static void virtio_net_change_num_queues(VirtIONet *n, int new_max_queues)
     
     /* add ctrl_vq last */ 
     virtio_add_queue(vdev, 64, virtio_net_handle_ctrl);
+//    virtio_add_queue(vdev, 64, NULL);
 }
 
 static int tap_enable(VirtIONet *n, int index)
@@ -1950,10 +1922,7 @@ static void virtio_net_set_hdr_len(VirtIONet *n, int mergeable_rx_bufs,
 			nc->host_vnet_hdr_len = guest_hdr_len;
 
 			if (0 > (ret = my_set_hdrsz(nc->tap_priv, &guest_hdr_len)))
-				printk(">>>>>%s:%d ret=%d %d %d %d %lx\n", __func__, __LINE__, ret,
-				guest_hdr_len,
-            	sizeof(struct virtio_net_hdr),
-				i, nc->tap_priv);
+				printk(">>>>>%s:%d\n", __func__, __LINE__);
         }
     }
 }
@@ -1984,8 +1953,6 @@ static void virtio_net_set_features(VirtIODevice *vdev, uint64_t features)
 {
     VirtIONet *n = (VirtIONet *)(vdev);
     int i;
-
-	printk(">>>>>>%s:%d\n", __func__, __LINE__);
 
 //    printk(">>>>>>>%s:%d from_guest=%lx backend=%lx %s\n",
  //       __func__, __LINE__, features, vdev->backend_features, vdev->name);
@@ -2103,16 +2070,18 @@ static int vhost_net_start_one(struct NetClientState *nc,
 
     return 0;
 fail:
-    file.tap_priv = 0UL;
     while (file.index-- > 0) {
         if (!virtio_queue_enabled(dev, nc->dev.vq_index +
                                       file.index)) {
             /* Queue might not be ready for start */
             continue;
         }
+#if 0
+    	file.tap_priv = 0UL;
 		my_vhost_net_ioctl(nc->dev.opaque,
 								VHOST_NET_SET_BACKEND,
 			    				(uint64_t)&file);
+#endif
     }
 
     vhost_dev_stop_(&nc->dev, dev);
@@ -2125,6 +2094,7 @@ fail_notifiers:
 static void vhost_net_stop_one(NetClientState * nc,
                                VirtIODevice *dev)
 {
+#if 0
     struct vhost_vring_file file = { .tap_priv = 0UL };
 
     for (file.index = 0; file.index < nc->dev.nvqs; ++file.index) {
@@ -2134,6 +2104,7 @@ static void vhost_net_stop_one(NetClientState * nc,
         if(r < 0)
 			printk(">>>>%s:%d\n", __func__, __LINE__);
     }
+#endif
 
     vhost_dev_stop_(&nc->dev, dev);
     vhost_dev_disable_notifiers(&nc->dev, dev);
@@ -2188,8 +2159,8 @@ static void vhost_net_stop(VirtIODevice *dev, NetClientState **ncs,
 
 static bool virtio_net_started(VirtIONet *n, uint8_t status)
 {           
-    VirtIODevice *vdev = (VirtIODevice *)n;
-	struct kvm *kvm = vdev->pci_dev.bus->kvm;
+    //VirtIODevice *vdev = (VirtIODevice *)n;
+	//struct kvm *kvm = vdev->pci_dev.bus->kvm;
     
     return (status & VIRTIO_CONFIG_S_DRIVER_OK) &&
         (n->status & VIRTIO_NET_S_LINK_UP);
@@ -2209,9 +2180,7 @@ static void virtio_net_set_status(struct VirtIODevice *vdev, uint8_t status)
         int r;
 
         n->vhost_started = 1;
-		printk(">>>>>%s:%d\n", __func__, __LINE__);
         r = vhost_net_start(vdev, n->my_sub_ncs, queues);
-		printk(">>>>>%s:%d\n", __func__, __LINE__);
         if (r < 0) {
 			printk(">>>>>%s:%d\n", __func__, __LINE__);
             n->vhost_started = 0;
@@ -2310,9 +2279,51 @@ void create_vnet(struct kvm *kvm)
 
     //4. reset
     virtio_pci_reset(vdev);
+
+	kvm->vdevices.vnet = n;
+}
+
+static void vhost_net_unrealize(VirtIODevice *vdev)
+{
+	int i;
+	NetClientState *nc;
+    VirtIONet *vn = (VirtIONet*)vdev;
+
+	virtio_net_set_status(vdev, 0);
+
+	//delete multiple rx/tx qeueus
+	for (i = 0; i <  vn->max_queues; i++)
+		virtio_net_del_queue(vn, i);
+
+	//delete control qeueu
+	virtio_del_queue(vdev, vn->max_queues * 2);
+
+	virtio_cleanup_(vdev);
+
+	for (i = 0; i < vn->max_queues; i++) {
+		nc = vn->my_sub_ncs[i];
+    	vhost_dev_cleanup_(&nc->dev);
+		my_tun_chr_close(nc->tap_priv);
+		kfree(nc);
+	}
 }
 
 void destroy_vnet(struct kvm *kvm)
 {
+	PCIDevice *pci_dev;
+    VirtIODevice *vdev;
+    VirtIONet *vn;
 
+	vn = kvm->vdevices.vnet;
+	vdev = &vn->parent_obj;
+	pci_dev = &vdev->pci_dev;
+
+	//1. destroy pci
+	//2. destroy vdev
+	//3. destroy vs
+    do_pci_unregister_device(pci_dev);
+
+    vhost_net_unrealize(vdev);
+
+	kfree(vn);
 }

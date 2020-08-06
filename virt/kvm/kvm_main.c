@@ -357,7 +357,9 @@ static void kvm_mmu_notifier_change_pte(struct mmu_notifier *mn,
 	idx = srcu_read_lock(&kvm->srcu);
 	spin_lock(&kvm->mmu_lock);
 	kvm->mmu_notifier_seq++;
+
 	kvm_set_spte_hva(kvm, address, pte);
+
 	spin_unlock(&kvm->mmu_lock);
 	srcu_read_unlock(&kvm->srcu, idx);
 }
@@ -841,6 +843,7 @@ static void update_memslots(struct kvm_memslots *slots,
 
 	while (i < KVM_MEM_SLOTS_NUM - 1 &&
 	       new->base_gfn <= mslots[i + 1].base_gfn) {
+
 		if (!mslots[i + 1].npages)
 			break;
 		mslots[i] = mslots[i + 1];
@@ -946,14 +949,16 @@ int __kvm_set_memory_region(struct kvm *kvm,
 		goto out;
 
 	r = -EINVAL;
-	as_id = mem->slot >> 16;
-	id = (u16)mem->slot;
+	as_id = mem->slot >> 16; //0
+	id = (u16)mem->slot;  //0
 
 	/* General sanity checks */
 	if (mem->memory_size & (PAGE_SIZE - 1))
 		goto out;
+
 	if (mem->guest_phys_addr & (PAGE_SIZE - 1))
 		goto out;
+
 	/* We can read the guest memory with __xxx_user() later on. */
 	if ((id < KVM_USER_MEM_SLOTS) &&
 	    ((mem->userspace_addr & (PAGE_SIZE - 1)) ||
@@ -961,8 +966,10 @@ int __kvm_set_memory_region(struct kvm *kvm,
 			(void __user *)(unsigned long)mem->userspace_addr,
 			mem->memory_size)))
 		goto out;
+
 	if (as_id >= KVM_ADDRESS_SPACE_NUM || id >= KVM_MEM_SLOTS_NUM)
 		goto out;
+
 	if (mem->guest_phys_addr + mem->memory_size < mem->guest_phys_addr)
 		goto out;
 
@@ -1040,6 +1047,7 @@ int __kvm_set_memory_region(struct kvm *kvm,
 	slots = kvzalloc(sizeof(struct kvm_memslots), GFP_KERNEL);
 	if (!slots)
 		goto out_free;
+
 	memcpy(slots, __kvm_memslots(kvm, as_id), sizeof(struct kvm_memslots));
 
 	if ((change == KVM_MR_DELETE) || (change == KVM_MR_MOVE)) {
@@ -2033,10 +2041,14 @@ static int __kvm_write_guest_page(struct kvm_memory_slot *memslot, gfn_t gfn,
 	addr = gfn_to_hva_memslot(memslot, gfn);
 	if (kvm_is_error_hva(addr))
 		return -EFAULT;
-	r = __copy_to_user((void __user *)addr + offset, data, len);
-	if (r)
-		return -EFAULT;
+
+//	r = __copy_to_user((void __user *)addr + offset, data, len);
+	//if (r)
+	//	return -EFAULT;
+	memcpy((void *)addr + offset, data, len);
+
 	mark_page_dirty_in_slot(memslot, gfn);
+
 	return 0;
 }
 
@@ -2606,7 +2618,7 @@ static int kvm_vcpu_release(struct inode *inode, struct file *filp)
 
 	printk(">>>>>%s:%d put \n", __func__, __LINE__);
 
-//	debugfs_remove_recursive(vcpu->debugfs_dentry);
+	debugfs_remove_recursive(vcpu->debugfs_dentry);
 //	kvm_put_kvm(vcpu->kvm);
 	return 0;
 }
@@ -2675,17 +2687,25 @@ static int kvm_vm_ioctl_create_vcpu(struct kvm *kvm, u32 id)
 	kvm->created_vcpus++;
 	mutex_unlock(&kvm->lock);
 
+
+
+
 	vcpu = kvm_arch_vcpu_create(kvm, id);
 	if (IS_ERR(vcpu)) {
 		r = PTR_ERR(vcpu);
 		goto vcpu_decrement;
 	}
 
+
+
+
 	preempt_notifier_init(&vcpu->preempt_notifier, &kvm_preempt_ops);
 
 	r = kvm_arch_vcpu_setup(vcpu);
 	if (r)
 		goto vcpu_destroy;
+
+
 
 #if 1
 	r = kvm_create_vcpu_debugfs(vcpu);
@@ -2702,12 +2722,15 @@ static int kvm_vm_ioctl_create_vcpu(struct kvm *kvm, u32 id)
 	BUG_ON(kvm->vcpus[atomic_read(&kvm->online_vcpus)]);
 
 	printk(">>>>>%s:%d get \n", __func__, __LINE__);
+
+
+
 	/* Now it's all set up, let userspace reach it */
 //	kvm_get_kvm(kvm);
 	r = create_vcpu_fd(vcpu);
 	if (r < 0) {
 		printk(">>>>>%s:%d put \n", __func__, __LINE__);
-		kvm_put_kvm(kvm);
+//		kvm_put_kvm(kvm);
 		goto unlock_vcpu_destroy;
 	}
 
@@ -2721,7 +2744,10 @@ static int kvm_vm_ioctl_create_vcpu(struct kvm *kvm, u32 id)
 	atomic_inc(&kvm->online_vcpus);
 
 	mutex_unlock(&kvm->lock);
+
 	kvm_arch_vcpu_postcreate(vcpu);
+
+
 	return r;
 
 unlock_vcpu_destroy:

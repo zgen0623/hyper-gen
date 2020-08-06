@@ -943,12 +943,14 @@ static int mmu_topup_memory_cache(struct kvm_mmu_memory_cache *cache,
 
 	if (cache->nobjs >= min)
 		return 0;
+
 	while (cache->nobjs < ARRAY_SIZE(cache->objects)) {
 		obj = kmem_cache_zalloc(base_cache, GFP_KERNEL);
 		if (!obj)
 			return -ENOMEM;
 		cache->objects[cache->nobjs++] = obj;
 	}
+
 	return 0;
 }
 
@@ -994,9 +996,11 @@ static int mmu_topup_memory_caches(struct kvm_vcpu *vcpu)
 				   pte_list_desc_cache, 8 + PTE_PREFETCH_NUM);
 	if (r)
 		goto out;
+
 	r = mmu_topup_memory_cache_page(&vcpu->arch.mmu_page_cache, 8);
 	if (r)
 		goto out;
+
 	r = mmu_topup_memory_cache(&vcpu->arch.mmu_page_header_cache,
 				   mmu_page_header_cache, 4);
 out:
@@ -2049,6 +2053,7 @@ static struct kvm_mmu_page *kvm_mmu_alloc_page(struct kvm_vcpu *vcpu, int direct
 	sp->spt = mmu_memory_cache_alloc(&vcpu->arch.mmu_page_cache);
 	if (!direct)
 		sp->gfns = mmu_memory_cache_alloc(&vcpu->arch.mmu_page_cache);
+
 	set_page_private(virt_to_page(sp->spt), (unsigned long)sp);
 
 	/*
@@ -2434,6 +2439,7 @@ static struct kvm_mmu_page *kvm_mmu_get_page(struct kvm_vcpu *vcpu,
 		quadrant &= (1 << ((PT32_PT_BITS - PT64_PT_BITS) * level)) - 1;
 		role.quadrant = quadrant;
 	}
+
 	for_each_valid_sp(vcpu->kvm, sp, gfn) {
 		if (sp->gfn != gfn) {
 			collisions++;
@@ -2473,6 +2479,7 @@ static struct kvm_mmu_page *kvm_mmu_get_page(struct kvm_vcpu *vcpu,
 	sp->role = role;
 	hlist_add_head(&sp->hash_link,
 		&vcpu->kvm->arch.mmu_page_hash[kvm_page_table_hashfn(gfn)]);
+
 	if (!direct) {
 		/*
 		 * we should do write protection before syncing pages
@@ -2487,6 +2494,7 @@ static struct kvm_mmu_page *kvm_mmu_get_page(struct kvm_vcpu *vcpu,
 		if (level > PT_PAGE_TABLE_LEVEL && need_sync)
 			flush |= kvm_sync_pages(vcpu, gfn, &invalid_list);
 	}
+
 	sp->mmu_valid_gen = vcpu->kvm->arch.mmu_valid_gen;
 	clear_page(sp->spt);
 	trace_kvm_mmu_get_page(sp, true);
@@ -3114,6 +3122,7 @@ static int __direct_map(struct kvm_vcpu *vcpu, gpa_t gpa, int write,
 		return RET_PF_RETRY;
 
 	trace_kvm_mmu_spte_requested(gpa, level, pfn);
+
 	for_each_shadow_entry(vcpu, gpa, it) {
 		/*
 		 * We cannot overwrite existing page tables with an NX
@@ -3139,8 +3148,11 @@ static int __direct_map(struct kvm_vcpu *vcpu, gpa_t gpa, int write,
 	ret = mmu_set_spte(vcpu, it.sptep, ACC_ALL,
 			   write, level, base_gfn, pfn, prefault,
 			   map_writable);
+
 	direct_pte_prefetch(vcpu, it.sptep);
+
 	++vcpu->stat.pf_fixed;
+
 	return ret;
 }
 
@@ -3547,12 +3559,15 @@ static int mmu_alloc_direct_roots(struct kvm_vcpu *vcpu)
 
 	if (vcpu->arch.mmu.shadow_root_level >= PT64_ROOT_4LEVEL) {
 		spin_lock(&vcpu->kvm->mmu_lock);
+
 		if(make_mmu_pages_available(vcpu) < 0) {
 			spin_unlock(&vcpu->kvm->mmu_lock);
 			return -ENOSPC;
 		}
+
 		sp = kvm_mmu_get_page(vcpu, 0, 0,
 				vcpu->arch.mmu.shadow_root_level, 1, ACC_ALL);
+
 		++sp->root_count;
 		spin_unlock(&vcpu->kvm->mmu_lock);
 		vcpu->arch.mmu.root_hpa = __pa(sp->spt);
@@ -3709,6 +3724,7 @@ static void mmu_sync_roots(struct kvm_vcpu *vcpu)
 		kvm_mmu_audit(vcpu, AUDIT_POST_SYNC);
 		return;
 	}
+
 	for (i = 0; i < 4; ++i) {
 		hpa_t root = vcpu->arch.mmu.pae_root[i];
 
@@ -4042,14 +4058,15 @@ static int tdp_page_fault(struct kvm_vcpu *vcpu, gpa_t gpa, u32 error_code,
 	if (page_fault_handle_page_track(vcpu, error_code, gfn))
 		return RET_PF_EMULATE;
 
-	r = mmu_topup_memory_caches(vcpu);
+	r = mmu_topup_memory_caches(vcpu); //prepare caches
 	if (r)
 		return r;
 
 	force_pt_level =
 		lpage_disallowed ||
 		!check_hugepage_cache_consistency(vcpu, gfn, PT_DIRECTORY_LEVEL);
-	level = mapping_level(vcpu, gfn, &force_pt_level);
+
+	level = mapping_level(vcpu, gfn, &force_pt_level); //get page level 2M with slot hva info
 	if (likely(!force_pt_level)) {
 		if (level > PT_DIRECTORY_LEVEL &&
 		    !check_hugepage_cache_consistency(vcpu, gfn, level))
@@ -4063,20 +4080,24 @@ static int tdp_page_fault(struct kvm_vcpu *vcpu, gpa_t gpa, u32 error_code,
 	mmu_seq = vcpu->kvm->mmu_notifier_seq;
 	smp_rmb();
 
-	if (try_async_pf(vcpu, prefault, gfn, gpa, &pfn, write, &map_writable))
+	if (try_async_pf(vcpu, prefault, gfn, gpa, &pfn, write, &map_writable)) //get pfn
 		return RET_PF_RETRY;
 
 	if (handle_abnormal_pfn(vcpu, 0, gfn, pfn, ACC_ALL, &r))
 		return r;
 
 	r = RET_PF_RETRY;
+
 	spin_lock(&vcpu->kvm->mmu_lock);
 	if (mmu_notifier_retry(vcpu->kvm, mmu_seq))
 		goto out_unlock;
+
 	if (make_mmu_pages_available(vcpu) < 0)
 		goto out_unlock;
+
 	if (likely(!force_pt_level))
-		transparent_hugepage_adjust(vcpu, gfn, &pfn, &level);
+		transparent_hugepage_adjust(vcpu, gfn, &pfn, &level); //just for 4k page pfn case
+
 	r = __direct_map(vcpu, gpa, write, map_writable, level, pfn,
 			 prefault, lpage_disallowed);
 out_unlock:
@@ -4802,10 +4823,12 @@ int kvm_mmu_load(struct kvm_vcpu *vcpu)
 	r = mmu_topup_memory_caches(vcpu);
 	if (r)
 		goto out;
+
 	r = mmu_alloc_roots(vcpu);
 	kvm_mmu_sync_roots(vcpu);
 	if (r)
 		goto out;
+
 	/* set_cr3() should ensure TLB has been flushed */
 	vcpu->arch.mmu.set_cr3(vcpu, vcpu->arch.mmu.root_hpa);
 out:

@@ -34,6 +34,7 @@
 #include "vpci.h"
 #include "vblk.h"
 #include "vnet.h"
+#include <linux/hugetlb.h>
 
 #define GSI_COUNT 4095
 
@@ -643,22 +644,26 @@ void init_virt_machine(struct kvm_vcpu *vcpu)
 {
 	INIT_LIST_HEAD(&vcpu->pci_bar_update_list);
 
-	if (vcpu->vcpu_id != 0)
-		return;
+	if (vcpu->vcpu_id == 0) {
+		//the following should be done after memory setup
+		load_linux_mini(vcpu);
+		load_cmdline_mini(vcpu);
+		build_mptable_mini(vcpu);
+		build_bootparams_mini(vcpu);
+	}
 
-	//the following should be done after memory setup
-	load_linux_mini(vcpu);
+	//the folloing must be done after vmlinux loaded
+	init_vcpu_virt_regs(vcpu);
 
-	load_cmdline_mini(vcpu);
-
-	build_mptable_mini(vcpu);
-	
-	build_bootparams_mini(vcpu);
-
-	create_vpci(vcpu->kvm);
-	create_vblk(vcpu->kvm);
-	create_vnet(vcpu->kvm);
+	if (vcpu->vcpu_id == 0) {
+		create_vpci(vcpu->kvm);
+		create_vblk(vcpu->kvm);
+		create_vnet(vcpu->kvm);
+	}
 }
+
+void free_huge_page(struct page *page);
+struct page *alloc_huge_page_node(struct hstate *h, int nid);
 
 int create_virt_machine(struct kvm *kvm)
 {
@@ -713,6 +718,15 @@ int create_virt_machine(struct kvm *kvm)
 	kvm_pc_setup_irq_routing(kvm);
 
 	INIT_LIST_HEAD(&kvm->evt_list);
+
+	//test hugetlb
+	struct page *page = alloc_huge_page_node(&default_hstate, numa_node_id());
+	
+	if (page) {
+		void *va = kmap(page);
+		printk(">>>>>>%s:%d va=%lx\n", __func__, __LINE__, va);
+		free_huge_page(page);
+	}
 
 create_irqchip_unlock:
 	mutex_unlock(&kvm->lock);

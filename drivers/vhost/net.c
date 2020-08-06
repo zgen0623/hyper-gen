@@ -281,13 +281,18 @@ static void vhost_net_vq_reset(struct vhost_net *n)
 	vhost_net_clear_ubuf_info(n);
 
 	for (i = 0; i < VHOST_NET_VQ_MAX; i++) {
-		n->vqs[i].done_idx = 0;
-		n->vqs[i].upend_idx = 0;
-		n->vqs[i].ubufs = NULL;
-		n->vqs[i].vhost_hlen = 0;
-		n->vqs[i].sock_hlen = 0;
-		n->vqs[i].tun_priv = NULL;
-		vhost_net_buf_init(&n->vqs[i].rxq);
+		struct vhost_net_virtqueue *nvq = &n->vqs[i];
+		nvq->done_idx = 0;
+		nvq->upend_idx = 0;
+		nvq->ubufs = NULL;
+		nvq->vhost_hlen = 0;
+		nvq->sock_hlen = 0;
+		if (nvq->tun_priv) {
+			struct vhost_poll *poll = n->poll + (nvq - n->vqs);
+			remove_wait_queue(nvq->tun_priv, &poll->wait);
+			nvq->tun_priv = NULL;
+		}
+		vhost_net_buf_init(&nvq->rxq);
 	}
 
 }
@@ -409,19 +414,14 @@ static void my_vhost_net_disable_vq(struct vhost_net *n,
 	struct vhost_net_virtqueue *nvq =
 		container_of(vq, struct vhost_net_virtqueue, vq);
 	struct vhost_poll *poll = n->poll + (nvq - n->vqs);
-	struct socket *sock;
 	wait_queue_head_t *head;
 
-	sock = vq->private_data;
-	if (!sock || !nvq->tun_priv)
-		return;
-
-#if 0
 	head = nvq->tun_priv;
+	if (!head)
+		return;
 
 	remove_wait_queue(head, &poll->wait);
 	nvq->tun_priv = NULL;
-#endif
 }
 
 #if 1
@@ -437,19 +437,6 @@ static int vhost_net_enable_vq(struct vhost_net *n,
 	if (!sock)
 		return 0;
 
-#if 0
-	if (poll->wqh)
-		return 0;
-
-	mask = file->f_op->poll(file, &poll->table);
-	if (mask)
-		vhost_poll_wakeup(&poll->wait, 0, 0, (void *)mask);
-
-	if (mask & POLLERR) {
-		vhost_poll_stop(poll);
-		ret = -EINVAL;
-	}
-#endif
 	return vhost_poll_start(poll, sock->file);
 }
 #endif
@@ -1016,6 +1003,7 @@ static int vhost_net_open(struct inode *inode, struct file *f)
 		n->vqs[i].done_idx = 0;
 		n->vqs[i].vhost_hlen = 0;
 		n->vqs[i].sock_hlen = 0;
+		n->vqs[i].tun_priv = NULL;
 		vhost_net_buf_init(&n->vqs[i].rxq);
 	}
 	vhost_dev_init(dev, vqs, VHOST_NET_VQ_MAX,
@@ -1067,6 +1055,7 @@ void *my_vhost_net_open(void)
 		n->vqs[i].done_idx = 0;
 		n->vqs[i].vhost_hlen = 0;
 		n->vqs[i].sock_hlen = 0;
+		n->vqs[i].tun_priv = NULL;
 		vhost_net_buf_init(&n->vqs[i].rxq);
 	}
 	vhost_dev_init(dev, vqs, VHOST_NET_VQ_MAX,
@@ -1126,27 +1115,6 @@ static void vhost_net_flush(struct vhost_net *n)
 
 static int vhost_net_release(struct inode *inode, struct file *f)
 {
-	struct vhost_net *n = f->private_data;
-	struct socket *tx_sock;
-	struct socket *rx_sock;
-
-	vhost_net_stop(n, &tx_sock, &rx_sock);
-	vhost_net_flush(n);
-	vhost_dev_stop(&n->dev);
-	vhost_dev_cleanup(&n->dev, false);
-	vhost_net_vq_reset(n);
-	if (tx_sock)
-		sockfd_put(tx_sock);
-	if (rx_sock)
-		sockfd_put(rx_sock);
-	/* Make sure no callbacks are outstanding */
-	synchronize_rcu_bh();
-	/* We do an extra flush before freeing memory,
-	 * since jobs can re-queue themselves. */
-	vhost_net_flush(n);
-	kfree(n->vqs[VHOST_NET_VQ_RX].rxq.queue);
-	kfree(n->dev.vqs);
-	kvfree(n);
 	return 0;
 }
 
@@ -1158,13 +1126,11 @@ int my_vhost_net_release(void *priv)
 
 	vhost_net_stop(n, &tx_sock, &rx_sock);
 	vhost_net_flush(n);
+
 	vhost_dev_stop(&n->dev);
 	vhost_dev_cleanup(&n->dev, false);
 	vhost_net_vq_reset(n);
-	if (tx_sock)
-		sockfd_put(tx_sock);
-	if (rx_sock)
-		sockfd_put(rx_sock);
+
 	/* Make sure no callbacks are outstanding */
 	synchronize_rcu_bh();
 	/* We do an extra flush before freeing memory,
@@ -1275,25 +1241,31 @@ static long my_vhost_net_set_backend(struct vhost_net *n, unsigned index,
 
 	mutex_lock(&n->dev.mutex);
 	r = vhost_dev_check_owner(&n->dev);
-	if (r)
+	if (r) {
+		printk(">>>>>%s:%d %lx %lx\n",__func__, __LINE__, n->dev.mm, current->mm);
 		goto err;
+	}
 
 	if (index >= VHOST_NET_VQ_MAX) {
+		printk(">>>>>%s:%d\n",__func__, __LINE__);
 		r = -ENOBUFS;
 		goto err;
 	}
 	vq = &n->vqs[index].vq;
 	nvq = &n->vqs[index];
+
 	mutex_lock(&vq->mutex);
 
 	/* Verify that ring has been setup correctly. */
 	if (!vhost_vq_access_ok(vq)) {
+		printk(">>>>>%s:%d\n",__func__, __LINE__);
 		r = -EFAULT;
 		goto err_vq;
 	}
 
 	sock = my_tun_get_socket((void*)tap_priv);
 	if (!sock) {
+		printk(">>>>>%s:%d\n",__func__, __LINE__);
 		r = -1;
 		goto err_vq;
 	}
@@ -1304,6 +1276,7 @@ static long my_vhost_net_set_backend(struct vhost_net *n, unsigned index,
 		ubufs = vhost_net_ubuf_alloc(vq,
 					     sock && vhost_sock_zcopy(sock));
 		if (IS_ERR(ubufs)) {
+			printk(">>>>>%s:%d\n",__func__, __LINE__);
 			r = PTR_ERR(ubufs);
 			goto err_ubufs;
 		}
@@ -1315,12 +1288,16 @@ static long my_vhost_net_set_backend(struct vhost_net *n, unsigned index,
 			nvq->rx_array = my_tun_get_skb_array((void*)tap_priv);
 
 		r = vhost_vq_init_access(vq);
-		if (r)
+		if (r) {
+			printk(">>>>>%s:%d\n",__func__, __LINE__);
 			goto err_used;
+		}
 
 		r = my_vhost_net_enable_vq(n, vq);
-		if (r)
+		if (r) {
+			printk(">>>>>%s:%d\n",__func__, __LINE__);
 			goto err_used;
+		}
 
 		oldubufs = nvq->ubufs;
 		nvq->ubufs = ubufs;
@@ -1364,96 +1341,7 @@ err:
 
 static long vhost_net_set_backend(struct vhost_net *n, unsigned index, int fd)
 {
-	struct socket *sock, *oldsock;
-	struct vhost_virtqueue *vq;
-	struct vhost_net_virtqueue *nvq;
-	struct vhost_net_ubuf_ref *ubufs, *oldubufs = NULL;
-	int r;
-
-	mutex_lock(&n->dev.mutex);
-	r = vhost_dev_check_owner(&n->dev);
-	if (r)
-		goto err;
-
-	if (index >= VHOST_NET_VQ_MAX) {
-		r = -ENOBUFS;
-		goto err;
-	}
-	vq = &n->vqs[index].vq;
-	nvq = &n->vqs[index];
-	mutex_lock(&vq->mutex);
-
-	/* Verify that ring has been setup correctly. */
-	if (!vhost_vq_access_ok(vq)) {
-		r = -EFAULT;
-		goto err_vq;
-	}
-	sock = get_socket(fd);
-	if (IS_ERR(sock)) {
-		r = PTR_ERR(sock);
-		goto err_vq;
-	}
-
-	/* start polling new socket */
-	oldsock = vq->private_data;
-	if (sock != oldsock) {
-		ubufs = vhost_net_ubuf_alloc(vq,
-					     sock && vhost_sock_zcopy(sock));
-		if (IS_ERR(ubufs)) {
-			r = PTR_ERR(ubufs);
-			goto err_ubufs;
-		}
-
-		vhost_net_disable_vq(n, vq);
-		vq->private_data = sock;
-		vhost_net_buf_unproduce(nvq);
-		if (index == VHOST_NET_VQ_RX)
-			nvq->rx_array = get_tap_skb_array(fd);
-		r = vhost_vq_init_access(vq);
-		if (r)
-			goto err_used;
-		r = vhost_net_enable_vq(n, vq);
-		if (r)
-			goto err_used;
-
-		oldubufs = nvq->ubufs;
-		nvq->ubufs = ubufs;
-
-		n->tx_packets = 0;
-		n->tx_zcopy_err = 0;
-		n->tx_flush = false;
-	}
-
-	mutex_unlock(&vq->mutex);
-
-	if (oldubufs) {
-		vhost_net_ubuf_put_wait_and_free(oldubufs);
-		mutex_lock(&vq->mutex);
-		vhost_zerocopy_signal_used(n, vq);
-		mutex_unlock(&vq->mutex);
-	}
-
-	if (oldsock) {
-		vhost_net_flush_vq(n, index);
-		sockfd_put(oldsock);
-	}
-
-	mutex_unlock(&n->dev.mutex);
 	return 0;
-
-err_used:
-	vq->private_data = oldsock;
-	vhost_net_enable_vq(n, vq);
-	if (ubufs)
-		vhost_net_ubuf_put_wait_and_free(ubufs);
-err_ubufs:
-	if (sock)
-		sockfd_put(sock);
-err_vq:
-	mutex_unlock(&vq->mutex);
-err:
-	mutex_unlock(&n->dev.mutex);
-	return r;
 }
 
 static long vhost_net_reset_owner(struct vhost_net *n)
@@ -1553,43 +1441,7 @@ out:
 static long vhost_net_ioctl(struct file *f, unsigned int ioctl,
 			    unsigned long arg)
 {
-	struct vhost_net *n = f->private_data;
-	void __user *argp = (void __user *)arg;
-	u64 __user *featurep = argp;
-	struct vhost_vring_file backend;
-	u64 features;
-	int r;
-
-	switch (ioctl) {
-	case VHOST_NET_SET_BACKEND:
-		if (copy_from_user(&backend, argp, sizeof backend))
-			return -EFAULT;
-		return vhost_net_set_backend(n, backend.index, backend.fd);
-	case VHOST_GET_FEATURES:
-		features = VHOST_NET_FEATURES;
-		if (copy_to_user(featurep, &features, sizeof features))
-			return -EFAULT;
-		return 0;
-	case VHOST_SET_FEATURES:
-		if (copy_from_user(&features, featurep, sizeof features))
-			return -EFAULT;
-		if (features & ~VHOST_NET_FEATURES)
-			return -EOPNOTSUPP;
-		return vhost_net_set_features(n, features);
-	case VHOST_RESET_OWNER:
-		return vhost_net_reset_owner(n);
-	case VHOST_SET_OWNER:
-		return vhost_net_set_owner(n);
-	default:
-		mutex_lock(&n->dev.mutex);
-		r = vhost_dev_ioctl(&n->dev, ioctl, argp);
-		if (r == -ENOIOCTLCMD)
-			r = vhost_vring_ioctl(&n->dev, ioctl, argp);
-		else
-			vhost_net_flush(n);
-		mutex_unlock(&n->dev.mutex);
-		return r;
-	}
+	return 0;
 }
 
 long my_vhost_dev_ioctl(struct vhost_dev *d, unsigned int ioctl, void *argp);

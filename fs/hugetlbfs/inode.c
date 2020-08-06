@@ -1241,6 +1241,7 @@ hugetlbfs_fill_super(struct super_block *sb, void *data, int silent)
 	sbinfo = kmalloc(sizeof(struct hugetlbfs_sb_info), GFP_KERNEL);
 	if (!sbinfo)
 		return -ENOMEM;
+
 	sb->s_fs_info = sbinfo;
 	sbinfo->hstate = config.hstate;
 	spin_lock_init(&sbinfo->stat_lock);
@@ -1263,6 +1264,7 @@ hugetlbfs_fill_super(struct super_block *sb, void *data, int silent)
 		if (!sbinfo->spool)
 			goto out_free;
 	}
+
 	sb->s_maxbytes = MAX_LFS_FILESIZE;
 	sb->s_blocksize = huge_page_size(config.hstate);
 	sb->s_blocksize_bits = huge_page_shift(config.hstate);
@@ -1273,6 +1275,7 @@ hugetlbfs_fill_super(struct super_block *sb, void *data, int silent)
 	if (!sb->s_root)
 		goto out_free;
 	return 0;
+
 out_free:
 	kfree(sbinfo->spool);
 	kfree(sbinfo);

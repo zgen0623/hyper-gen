@@ -2885,13 +2885,12 @@ int my_set_if(void *tap_priv, struct ifreq *ifr)
 	}
 
 	ifr->ifr_name[IFNAMSIZ-1] = '\0';
-
 	ret = my_tun_set_iff(sock_net(&tfile->sk), tfile, ifr);
-
-	//printk(">>>>>%s:%d %lx %lx\n", __func__, __LINE__, tfile, tun_get(tfile));
 
 unlock:
 	rtnl_unlock();
+	if (tun)
+		tun_put(tun);
 
 	return ret;
 }
@@ -2914,6 +2913,8 @@ int my_get_hdrsz(void *tap_priv, int *size)
 
 unlock:
 	rtnl_unlock();
+	if (tun)
+		tun_put(tun);
 
 	return ret;
 }
@@ -2942,6 +2943,9 @@ int my_set_hdrsz(void *tap_priv, int *size)
 
 unlock:
 	rtnl_unlock();
+	if (tun)
+		tun_put(tun);
+
 
 	return ret;
 }
@@ -2970,6 +2974,8 @@ int my_set_sndbuf(void *tap_priv, int *size)
 
 unlock:
 	rtnl_unlock();
+	if (tun)
+		tun_put(tun);
 
 	return ret;
 }
@@ -2992,6 +2998,9 @@ int my_set_offload(void *tap_priv, unsigned offload)
 
 unlock:
 	rtnl_unlock();
+	if (tun)
+		tun_put(tun);
+
 	return ret;
 }
 

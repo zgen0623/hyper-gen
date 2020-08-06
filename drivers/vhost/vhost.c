@@ -247,7 +247,7 @@ EXPORT_SYMBOL_GPL(vhost_poll_stop);
 
 static void my_vhost_poll_stop(struct vhost_virtqueue *vq)
 {
-	printk("%s:%d\n", __func__, __LINE__);
+//	printk("%s:%d\n", __func__, __LINE__);
 	vq->notify_status = -1;
 	kfree(vq->notify_priv);
 	vq->notify_priv = NULL;
@@ -325,9 +325,6 @@ static void vhost_vq_reset(struct vhost_dev *dev,
 {
 	vq->notify_status = -1;
 	vq->signal_type = -1;
-	vq->irq_priv = NULL;
-	vq->notify_priv = NULL;
-
 	vq->num = 1;
 	vq->desc = NULL;
 	vq->avail = NULL;
@@ -483,6 +480,8 @@ void vhost_dev_init(struct vhost_dev *dev,
 		vq->indirect = NULL;
 		vq->heads = NULL;
 		vq->dev = dev;
+		vq->irq_priv = NULL;
+		vq->notify_priv = NULL;
 		mutex_init(&vq->mutex);
 		vhost_vq_reset(dev, vq);
 		if (vq->handle_kick)
@@ -546,6 +545,8 @@ long vhost_dev_set_owner(struct vhost_dev *dev)
 
 	/* No owner, become one */
 	dev->mm = get_task_mm(current);
+	printk(">>>>>%s:%d %lx\n", __func__, __LINE__, dev->mm );
+
 	worker = kthread_create(vhost_worker, dev, "vhost-%d", current->pid);
 	if (IS_ERR(worker)) {
 		err = PTR_ERR(worker);
@@ -660,8 +661,6 @@ void vhost_dev_cleanup(struct vhost_dev *dev, bool locked)
 	int i;
 
 	for (i = 0; i < dev->nvqs; ++i) {
-		if (dev->vqs[i]->notify_status > 0) 
-			my_vhost_poll_stop(dev->vqs[i]);
 		if (dev->vqs[i]->error_ctx)
 			eventfd_ctx_put(dev->vqs[i]->error_ctx);
 		if (dev->vqs[i]->error)
@@ -671,8 +670,12 @@ void vhost_dev_cleanup(struct vhost_dev *dev, bool locked)
 		if (dev->vqs[i]->call)
 			fput(dev->vqs[i]->call);
 
-		if (dev->vqs[i]->irq_priv != NULL)
+		if (dev->vqs[i]->notify_status > 0) 
+			my_vhost_poll_stop(dev->vqs[i]);
+		if (dev->vqs[i]->irq_priv != NULL) {
 			kfree(dev->vqs[i]->irq_priv);
+			dev->vqs[i]->irq_priv = NULL;
+		}
 
 		vhost_vq_reset(dev, dev->vqs[i]);
 	}
@@ -1315,210 +1318,7 @@ err:
 
 long vhost_vring_ioctl(struct vhost_dev *d, int ioctl, void __user *argp)
 {
-	bool pollstart = false, pollstop = false;
-	u32 __user *idxp = argp;
-	struct vhost_virtqueue *vq;
-	struct vhost_vring_state s;
-	struct vhost_vring_file f;
-	struct vhost_vring_addr a;
-	u32 idx;
-	long r;
-
-	r = get_user(idx, idxp);
-	if (r < 0)
-		return r;
-	if (idx >= d->nvqs)
-		return -ENOBUFS;
-
-	idx = array_index_nospec(idx, d->nvqs);
-	vq = d->vqs[idx];
-
-	mutex_lock(&vq->mutex);
-
-	switch (ioctl) {
-	case VHOST_SET_VRING_NUM:
-		/* Resizing ring with an active backend?
-		 * You don't want to do that. */
-		if (vq->private_data) {
-			r = -EBUSY;
-			break;
-		}
-		if (copy_from_user(&s, argp, sizeof s)) {
-			r = -EFAULT;
-			break;
-		}
-		if (!s.num || s.num > 0xffff || (s.num & (s.num - 1))) {
-			r = -EINVAL;
-			break;
-		}
-		vq->num = s.num;
-		break;
-	case VHOST_SET_VRING_BASE:
-		/* Moving base with an active backend?
-		 * You don't want to do that. */
-		if (vq->private_data) {
-			r = -EBUSY;
-			break;
-		}
-		if (copy_from_user(&s, argp, sizeof s)) {
-			r = -EFAULT;
-			break;
-		}
-		if (s.num > 0xffff) {
-			r = -EINVAL;
-			break;
-		}
-		vq->last_avail_idx = s.num;
-		/* Forget the cached index value. */
-		vq->avail_idx = vq->last_avail_idx;
-		break;
-	case VHOST_GET_VRING_BASE:
-		s.index = idx;
-		s.num = vq->last_avail_idx;
-		if (copy_to_user(argp, &s, sizeof s))
-			r = -EFAULT;
-		break;
-	case VHOST_SET_VRING_ADDR:
-		if (copy_from_user(&a, argp, sizeof a)) {
-			r = -EFAULT;
-			break;
-		}
-		if (a.flags & ~(0x1 << VHOST_VRING_F_LOG)) {
-			r = -EOPNOTSUPP;
-			break;
-		}
-		/* For 32bit, verify that the top 32bits of the user
-		   data are set to zero. */
-		if ((u64)(unsigned long)a.desc_user_addr != a.desc_user_addr ||
-		    (u64)(unsigned long)a.used_user_addr != a.used_user_addr ||
-		    (u64)(unsigned long)a.avail_user_addr != a.avail_user_addr) {
-			r = -EFAULT;
-			break;
-		}
-
-		/* Make sure it's safe to cast pointers to vring types. */
-		BUILD_BUG_ON(__alignof__ *vq->avail > VRING_AVAIL_ALIGN_SIZE);
-		BUILD_BUG_ON(__alignof__ *vq->used > VRING_USED_ALIGN_SIZE);
-		if ((a.avail_user_addr & (VRING_AVAIL_ALIGN_SIZE - 1)) ||
-		    (a.used_user_addr & (VRING_USED_ALIGN_SIZE - 1)) ||
-		    (a.log_guest_addr & (VRING_USED_ALIGN_SIZE - 1))) {
-			r = -EINVAL;
-			break;
-		}
-
-		/* We only verify access here if backend is configured.
-		 * If it is not, we don't as size might not have been setup.
-		 * We will verify when backend is configured. */
-		if (vq->private_data) {
-			if (!vq_access_ok(vq, vq->num,
-				(void __user *)(unsigned long)a.desc_user_addr,
-				(void __user *)(unsigned long)a.avail_user_addr,
-				(void __user *)(unsigned long)a.used_user_addr)) {
-				r = -EINVAL;
-				break;
-			}
-
-			/* Also validate log access for used ring if enabled. */
-			if ((a.flags & (0x1 << VHOST_VRING_F_LOG)) &&
-			    !log_access_ok(vq->log_base, a.log_guest_addr,
-					   sizeof *vq->used +
-					   vq->num * sizeof *vq->used->ring)) {
-				r = -EINVAL;
-				break;
-			}
-		}
-
-		vq->log_used = !!(a.flags & (0x1 << VHOST_VRING_F_LOG));
-		vq->desc = (void __user *)(unsigned long)a.desc_user_addr;
-		vq->avail = (void __user *)(unsigned long)a.avail_user_addr;
-		vq->log_addr = a.log_guest_addr;
-		vq->used = (void __user *)(unsigned long)a.used_user_addr;
-		break;
-	case VHOST_SET_VRING_KICK:
-		if (copy_from_user(&f, argp, sizeof f)) {
-			r = -EFAULT;
-			break;
-		}
-
-		if (vq->notify_status != f.fd) {
-			if (f.fd == 0)
-				pollstop = true;
-			else if (f.fd == 1)
-				pollstart = true;
-		} else {
-			if (f.fd == 1) {
-				pollstop = true;
-				pollstart = true;
-			}
-		}
-
-#if 0
-		printk(">>>>>>%s:%d [%d] fd=%d prev_fd=%d evt=%d poll=%d\n",__func__, __LINE__,
-			idx, f.fd, vq->notify_status, f.evt_id, pollstart);
-#endif
-
-		vq->notify_status = f.fd;
-		vq->evt_id = f.evt_id;
-		vq->kvm_id = f.kvm_id;
-
-		vq->poll.evt_id = f.evt_id;
-
-		if (pollstart && vq->handle_kick)
-			my_vhost_poll_start(&vq->poll, vq);
-
-		break;
-	case VHOST_SET_VRING_CALL:
-		if (copy_from_user(&f, argp, sizeof f)) {
-			r = -EFAULT;
-			break;
-		}
-		if (vq->signal_type != f.fd) {
-			if (f.fd == 2) {
-				vq->kvm_id = f.kvm_id;
-				vq->irq_priv = vhost_alloc_irq_entry_kvm(f.kvm_id, f.virq);
-			} else if (vq->signal_type == 2){
-				kfree(vq->irq_priv);
-				vq->irq_priv = NULL;
-			}
-
-			vq->signal_type = f.fd;
-		} else if (vq->signal_type == 2) {
-			vq->kvm_id = f.kvm_id;
-			kfree(vq->irq_priv);
-			vq->irq_priv = vhost_alloc_irq_entry_kvm(f.kvm_id, f.virq);
-		}
-
-		break;
-	case VHOST_SET_VRING_ENDIAN:
-		r = vhost_set_vring_endian(vq, argp);
-		break;
-	case VHOST_GET_VRING_ENDIAN:
-		r = vhost_get_vring_endian(vq, idx, argp);
-		break;
-	case VHOST_SET_VRING_BUSYLOOP_TIMEOUT:
-		if (copy_from_user(&s, argp, sizeof(s))) {
-			r = -EFAULT;
-			break;
-		}
-		vq->busyloop_timeout = s.num;
-		break;
-	case VHOST_GET_VRING_BUSYLOOP_TIMEOUT:
-		s.index = idx;
-		s.num = vq->busyloop_timeout;
-		if (copy_to_user(argp, &s, sizeof(s)))
-			r = -EFAULT;
-		break;
-	default:
-		r = -ENOIOCTLCMD;
-	}
-
-	mutex_unlock(&vq->mutex);
-
-	if (pollstop && vq->handle_kick)
-		vhost_poll_flush(&vq->poll);
-
-
-	return r;
+	return 0;
 }
 EXPORT_SYMBOL_GPL(vhost_vring_ioctl);
 
@@ -1640,8 +1440,8 @@ long my_vhost_vring_ioctl(struct vhost_dev *d, int ioctl, void *argp)
 		vq->evt_id = f->evt_id;
 		vq->kvm_id = f->kvm_id;
 
-		printk(">>>>>>%s:%d [%d] fd=%d prev_fd=%d evt=%d poll=%d\n",__func__, __LINE__,
-			idx, f->fd, vq->notify_status, f->evt_id, pollstart);
+		//printk(">>>>>>%s:%d [%d] fd=%d prev_fd=%d evt=%d poll=%d\n",__func__, __LINE__,
+		//	idx, f->fd, vq->notify_status, f->evt_id, pollstart);
 
 		vq->poll.evt_id = f->evt_id;
 

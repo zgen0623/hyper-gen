@@ -4032,6 +4032,7 @@ int kvm_vm_ioctl_set_tss_addr(struct kvm *kvm, unsigned long addr)
 
 	if (addr > (unsigned int)(-3 * PAGE_SIZE))
 		return -EINVAL;
+
 	ret = kvm_x86_ops->set_tss_addr(kvm, addr);
 	return ret;
 }
@@ -8135,8 +8136,11 @@ int kvm_arch_vcpu_setup(struct kvm_vcpu *vcpu)
 	r = vcpu_load(vcpu);
 	if (r)
 		return r;
+
 	kvm_vcpu_reset(vcpu, false);
+
 	kvm_mmu_setup(vcpu);
+
 	vcpu_put(vcpu);
 	return r;
 }
@@ -8150,6 +8154,7 @@ void kvm_arch_vcpu_postcreate(struct kvm_vcpu *vcpu)
 
 	if (vcpu_load(vcpu))
 		return;
+
 	msr.data = 0x0;
 	msr.index = MSR_IA32_TSC;
 	msr.host_initiated = true;
@@ -8164,7 +8169,6 @@ void kvm_arch_vcpu_postcreate(struct kvm_vcpu *vcpu)
 
 	init_virt_machine(vcpu);
 
-	init_vcpu_virt_regs(vcpu);
 }
 
 void kvm_arch_vcpu_destroy(struct kvm_vcpu *vcpu)
@@ -8726,13 +8730,18 @@ int kvm_arch_create_memslot(struct kvm *kvm, struct kvm_memory_slot *slot,
 		int lpages;
 		int level = i + 1;
 
+		//level 1 is 4K page
+		//level 2 is 2M page
+		//level 3 is 1G page
 		lpages = gfn_to_index(slot->base_gfn + npages - 1,
 				      slot->base_gfn, level) + 1;
 
 		slot->arch.rmap[i] =
 			kvzalloc(lpages * sizeof(*slot->arch.rmap[i]), GFP_KERNEL);
+
 		if (!slot->arch.rmap[i])
 			goto out_free;
+
 		if (i == 0)
 			continue;
 
@@ -8744,8 +8753,10 @@ int kvm_arch_create_memslot(struct kvm *kvm, struct kvm_memory_slot *slot,
 
 		if (slot->base_gfn & (KVM_PAGES_PER_HPAGE(level) - 1))
 			linfo[0].disallow_lpage = 1;
+
 		if ((slot->base_gfn + npages) & (KVM_PAGES_PER_HPAGE(level) - 1))
 			linfo[lpages - 1].disallow_lpage = 1;
+
 		ugfn = slot->userspace_addr >> PAGE_SHIFT;
 		/*
 		 * If the gfn and userspace address are not aligned wrt each
