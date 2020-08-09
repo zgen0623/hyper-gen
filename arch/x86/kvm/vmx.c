@@ -2739,8 +2739,10 @@ static void vmx_queue_exception(struct kvm_vcpu *vcpu)
 		int inc_eip = 0;
 		if (kvm_exception_is_soft(nr))
 			inc_eip = vcpu->arch.event_exit_inst_len;
-		if (kvm_inject_realmode_interrupt(vcpu, nr, inc_eip) != EMULATE_DONE)
+		if (kvm_inject_realmode_interrupt(vcpu, nr, inc_eip) != EMULATE_DONE) {
+			printk(">>>>>%s:%d\n", __func__, __LINE__);
 			kvm_make_request(KVM_REQ_TRIPLE_FAULT, vcpu);
+		}
 		return;
 	}
 
@@ -5077,6 +5079,7 @@ static int init_rmode_identity_map(struct kvm *kvm)
 	int i, idx, r = 0;
 	kvm_pfn_t identity_map_pfn;
 	u32 tmp;
+//	printk(">>>>>>%s:%d\n", __func__, __LINE__);
 
 	/* Protect kvm->arch.ept_identity_pagetable_done. */
 	mutex_lock(&kvm->slots_lock);
@@ -5091,13 +5094,17 @@ static int init_rmode_identity_map(struct kvm *kvm)
 
 	r = __x86_set_memory_region(kvm, IDENTITY_PAGETABLE_PRIVATE_MEMSLOT,
 				    kvm->arch.ept_identity_map_addr, PAGE_SIZE);
-	if (r < 0)
+	if (r < 0) {
+		printk(">>>>>>%s:%d\n", __func__, __LINE__);
 		goto out2;
+	}
 
 	idx = srcu_read_lock(&kvm->srcu);
 	r = kvm_clear_guest_page(kvm, identity_map_pfn, 0, PAGE_SIZE);
-	if (r < 0)
+	if (r < 0) {
+		printk(">>>>>>%s:%d\n", __func__, __LINE__);
 		goto out;
+	}
 
 	/* Set up identity-mapping pagetable for EPT in real mode */
 	for (i = 0; i < PT32_ENT_PER_PAGE; i++) {
@@ -5106,8 +5113,10 @@ static int init_rmode_identity_map(struct kvm *kvm)
 
 		r = kvm_write_guest_page(kvm, identity_map_pfn,
 				&tmp, i * sizeof(tmp), sizeof(tmp));
-		if (r < 0)
+		if (r < 0) {
+			printk(">>>>>>%s:%d\n", __func__, __LINE__);
 			goto out;
+		}
 	}
 	kvm->arch.ept_identity_pagetable_done = true;
 
@@ -5142,13 +5151,17 @@ static int alloc_apic_access_page(struct kvm *kvm)
 	mutex_lock(&kvm->slots_lock);
 	if (kvm->arch.apic_access_page_done)
 		goto out;
+
 	r = __x86_set_memory_region(kvm, APIC_ACCESS_PAGE_PRIVATE_MEMSLOT,
 				    APIC_DEFAULT_PHYS_BASE, PAGE_SIZE);
-	if (r)
+	if (r) {
+		printk(">>>>>>%s:%d\n", __func__, __LINE__);
 		goto out;
+	}
 
 	page = gfn_to_page(kvm, APIC_DEFAULT_PHYS_BASE >> PAGE_SHIFT);
 	if (is_error_page(page)) {
+		printk(">>>>>>%s:%d\n", __func__, __LINE__);
 		r = -EFAULT;
 		goto out;
 	}
@@ -5157,7 +5170,7 @@ static int alloc_apic_access_page(struct kvm *kvm)
 	 * Do not pin the page in memory, so that memory hot-unplug
 	 * is able to migrate it.
 	 */
-	put_page(page);
+//	put_page(page);
 	kvm->arch.apic_access_page_done = true;
 out:
 	mutex_unlock(&kvm->slots_lock);
@@ -6069,8 +6082,10 @@ static void vmx_inject_irq(struct kvm_vcpu *vcpu)
 		int inc_eip = 0;
 		if (vcpu->arch.interrupt.soft)
 			inc_eip = vcpu->arch.event_exit_inst_len;
-		if (kvm_inject_realmode_interrupt(vcpu, irq, inc_eip) != EMULATE_DONE)
+		if (kvm_inject_realmode_interrupt(vcpu, irq, inc_eip) != EMULATE_DONE) {
+			printk(">>>>>%s:%d\n", __func__, __LINE__);
 			kvm_make_request(KVM_REQ_TRIPLE_FAULT, vcpu);
+		}
 		return;
 	}
 	intr = irq | INTR_INFO_VALID_MASK;
@@ -6104,8 +6119,10 @@ static void vmx_inject_nmi(struct kvm_vcpu *vcpu)
 	vmx->loaded_vmcs->nmi_known_unmasked = false;
 
 	if (vmx->rmode.vm86_active) {
-		if (kvm_inject_realmode_interrupt(vcpu, NMI_VECTOR, 0) != EMULATE_DONE)
+		if (kvm_inject_realmode_interrupt(vcpu, NMI_VECTOR, 0) != EMULATE_DONE) {
+			printk(">>>>>%s:%d\n", __func__, __LINE__);
 			kvm_make_request(KVM_REQ_TRIPLE_FAULT, vcpu);
+		}
 		return;
 	}
 
@@ -6379,6 +6396,7 @@ static int handle_external_interrupt(struct kvm_vcpu *vcpu)
 
 static int handle_triple_fault(struct kvm_vcpu *vcpu)
 {
+	printk(">>>>>%s:%d\n", __func__, __LINE__);
 	vcpu->run->exit_reason = KVM_EXIT_SHUTDOWN;
 	vcpu->mmio_needed = 0;
 	return 0;
@@ -9188,6 +9206,8 @@ static int vmx_handle_exit(struct kvm_vcpu *vcpu)
 		}
 	}
 
+//	printk(">>>>>>%s:%d vcpu=%d reasion=%d\n", __func__, __LINE__,vcpu->vcpu_id, exit_reason);
+
 	if (exit_reason < kvm_vmx_max_exit_handlers
 	    && kvm_vmx_exit_handlers[exit_reason])
 		return kvm_vmx_exit_handlers[exit_reason](vcpu);
@@ -10051,7 +10071,9 @@ static void vmx_free_vcpu(struct kvm_vcpu *vcpu)
 	vmx_free_vcpu_nested(vcpu);
 	free_loaded_vmcs(vmx->loaded_vmcs);
 	kfree(vmx->guest_msrs);
+
 	kvm_vcpu_uninit(vcpu);
+
 	kmem_cache_free(kvm_vcpu_cache, vmx);
 }
 
@@ -10068,8 +10090,10 @@ static struct kvm_vcpu *vmx_create_vcpu(struct kvm *kvm, unsigned int id)
 	vmx->vpid = allocate_vpid();
 
 	err = kvm_vcpu_init(&vmx->vcpu, kvm, id);
-	if (err)
+	if (err) {
+		printk(">>>>>%s:%d\n", __func__, __LINE__);
 		goto free_vcpu;
+	}
 
 	err = -ENOMEM;
 
@@ -10093,8 +10117,10 @@ static struct kvm_vcpu *vmx_create_vcpu(struct kvm *kvm, unsigned int id)
 		goto free_pml;
 
 	err = alloc_loaded_vmcs(&vmx->vmcs01);
-	if (err < 0)
+	if (err < 0) {
+		printk(">>>>>%s:%d\n", __func__, __LINE__);
 		goto free_msrs;
+	}
 
 	msr_bitmap = vmx->vmcs01.msr_bitmap;
 	vmx_disable_intercept_for_msr(msr_bitmap, MSR_FS_BASE, MSR_TYPE_RW);
@@ -10109,19 +10135,25 @@ static struct kvm_vcpu *vmx_create_vcpu(struct kvm *kvm, unsigned int id)
 	cpu = get_cpu();
 	vmx_vcpu_load(&vmx->vcpu, cpu);
 	vmx->vcpu.cpu = cpu;
+
 	vmx_vcpu_setup(vmx);
+
 	vmx_vcpu_put(&vmx->vcpu);
 	put_cpu();
 	if (cpu_need_virtualize_apic_accesses(&vmx->vcpu)) {
 		err = alloc_apic_access_page(kvm);
-		if (err)
+		if (err) {
+			printk(">>>>>%s:%d\n", __func__, __LINE__);
 			goto free_vmcs;
+		}
 	}
 
 	if (enable_ept) {
 		err = init_rmode_identity_map(kvm);
-		if (err)
+		if (err) {
+			printk(">>>>>%s:%d\n", __func__, __LINE__);
 			goto free_vmcs;
+		}
 	}
 
 	if (nested)

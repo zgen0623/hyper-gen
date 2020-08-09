@@ -34,6 +34,7 @@ struct vm_struct {
 	struct vm_struct	*next;
 	void			*addr;
 	unsigned long		size;
+	unsigned long		page_size;
 	unsigned long		flags;
 	struct page		**pages;
 	unsigned int		nr_pages;

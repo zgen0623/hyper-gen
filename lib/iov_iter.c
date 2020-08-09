@@ -447,6 +447,19 @@ void iov_iter_init(struct iov_iter *i, int direction,
 }
 EXPORT_SYMBOL(iov_iter_init);
 
+void my_iov_iter_init(struct iov_iter *i, int direction,
+			const struct iovec *iov, unsigned long nr_segs,
+			size_t count)
+{
+	direction |= ITER_KVEC;
+	i->type = direction;
+	i->kvec = (struct kvec *)iov;
+
+	i->nr_segs = nr_segs;
+	i->iov_offset = 0;
+	i->count = count;
+}
+
 static void memcpy_from_page(char *to, struct page *page, size_t offset, size_t len)
 {
 	char *from = kmap_atomic(page);
@@ -596,26 +609,31 @@ EXPORT_SYMBOL(_copy_from_iter);
 bool _copy_from_iter_full(void *addr, size_t bytes, struct iov_iter *i)
 {
 	char *to = addr;
+
 	if (unlikely(i->type & ITER_PIPE)) {
 		WARN_ON(1);
 		return false;
 	}
+
 	if (unlikely(i->count < bytes))
 		return false;
 
 	if (iter_is_iovec(i))
 		might_fault();
+
 	iterate_all_kinds(i, bytes, v, ({
 		if (copyin((to += v.iov_len) - v.iov_len,
 				      v.iov_base, v.iov_len))
 			return false;
 		0;}),
+
 		memcpy_from_page((to += v.bv_len) - v.bv_len, v.bv_page,
 				 v.bv_offset, v.bv_len),
 		memcpy((to += v.iov_len) - v.iov_len, v.iov_base, v.iov_len)
 	)
 
 	iov_iter_advance(i, bytes);
+
 	return true;
 }
 EXPORT_SYMBOL(_copy_from_iter_full);
@@ -670,6 +688,7 @@ bool _copy_from_iter_full_nocache(void *addr, size_t bytes, struct iov_iter *i)
 	}
 	if (unlikely(i->count < bytes))
 		return false;
+
 	iterate_all_kinds(i, bytes, v, ({
 		if (__copy_from_user_inatomic_nocache((to += v.iov_len) - v.iov_len,
 					     v.iov_base, v.iov_len))
@@ -1069,6 +1088,9 @@ static ssize_t pipe_get_pages(struct iov_iter *i,
 	return __pipe_get_pages(i, min(maxsize, capacity), pages, idx, start);
 }
 
+long my_follow_page(unsigned long vaddr, unsigned long remainder,
+			 struct page **pages);
+
 ssize_t iov_iter_get_pages(struct iov_iter *i,
 		   struct page **pages, size_t maxsize, unsigned maxpages,
 		   size_t *start)
@@ -1078,6 +1100,7 @@ ssize_t iov_iter_get_pages(struct iov_iter *i,
 
 	if (unlikely(i->type & ITER_PIPE))
 		return pipe_get_pages(i, pages, maxsize, maxpages, start);
+
 	iterate_all_kinds(i, maxsize, v, ({
 		unsigned long addr = (unsigned long)v.iov_base;
 		size_t len = v.iov_len + (*start = addr & (PAGE_SIZE - 1));
@@ -1086,11 +1109,14 @@ ssize_t iov_iter_get_pages(struct iov_iter *i,
 
 		if (len > maxpages * PAGE_SIZE)
 			len = maxpages * PAGE_SIZE;
+
 		addr &= ~(PAGE_SIZE - 1);
 		n = DIV_ROUND_UP(len, PAGE_SIZE);
+
 		res = get_user_pages_fast(addr, n, (i->type & WRITE) != WRITE, pages);
 		if (unlikely(res < 0))
 			return res;
+
 		return (res == n ? len : res * PAGE_SIZE) - *start;
 	0;}),({
 		/* can't be more than PAGE_SIZE */
@@ -1098,9 +1124,24 @@ ssize_t iov_iter_get_pages(struct iov_iter *i,
 		get_page(*pages = v.bv_page);
 		return v.bv_len;
 	}),({
-		return -EFAULT;
+		unsigned long addr = (unsigned long)v.iov_base;
+		size_t len = v.iov_len + (*start = addr & (PAGE_SIZE - 1));
+		int n;
+		int res;
+
+		if (len > maxpages * PAGE_SIZE)
+			len = maxpages * PAGE_SIZE;
+
+		addr &= ~(PAGE_SIZE - 1);
+		n = DIV_ROUND_UP(len, PAGE_SIZE);
+
+		res = my_follow_page(addr, n, pages);
+
+		return (res == n ? len : res * PAGE_SIZE) - *start;
+		0;
 	})
 	)
+
 	return 0;
 }
 EXPORT_SYMBOL(iov_iter_get_pages);

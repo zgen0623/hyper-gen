@@ -983,6 +983,7 @@ static int kvm_hv_set_msr_pw(struct kvm_vcpu *vcpu, u32 msr, u64 data,
 	case HV_X64_MSR_RESET:
 		if (data == 1) {
 			vcpu_debug(vcpu, "hyper-v reset requested\n");
+			printk(">>>hyper-v reset requested %s:%d\n", __func__, __LINE__);
 			kvm_make_request(KVM_REQ_HV_RESET, vcpu);
 		}
 		break;

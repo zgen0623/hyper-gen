@@ -449,6 +449,7 @@ static void virtio_net_get_config(VirtIODevice *vdev, uint8_t *config)
 {   
     VirtIONet *n = (VirtIONet *)(vdev);
     struct virtio_net_config netcfg;
+	printk(">>>>>%s:%d\n", __func__, __LINE__);
 
     netcfg.status = n->status;
     netcfg.max_virtqueue_pairs = n->max_queues;
@@ -464,6 +465,7 @@ static void virtio_net_set_config(VirtIODevice *vdev, const uint8_t *config)
 {   
     VirtIONet *n = (VirtIONet *)(vdev);
     struct virtio_net_config netcfg = {};
+	printk(">>>>>%s:%d\n", __func__, __LINE__);
 
     memcpy(&netcfg, config, n->config_size);
     
@@ -479,6 +481,7 @@ static uint64_t virtio_net_get_features(VirtIODevice *vdev, uint64_t features)
     VirtIONet *n = (VirtIONet *)(vdev);
     NetClientState *nc = n->my_sub_ncs[0];
 
+	printk(">>>>>%s:%d\n", __func__, __LINE__);
     /* Firstly sync all virtio-net possible supported features */
     features |= n->host_features;
     
@@ -1752,6 +1755,7 @@ static void virtio_net_handle_ctrl(VirtIODevice *vdev, VirtQueue *vq)
     size_t s;
     struct iovec *iov;
     unsigned int iov_cnt;
+	printk(">>>>>%s:%d\n", __func__, __LINE__);
 
     for (;;) {
         elem = virtqueue_pop(vq);
@@ -1954,6 +1958,7 @@ static void virtio_net_set_features(VirtIODevice *vdev, uint64_t features)
     VirtIONet *n = (VirtIONet *)(vdev);
     int i;
 
+	printk(">>>>>%s:%d\n", __func__, __LINE__);
 //    printk(">>>>>>>%s:%d from_guest=%lx backend=%lx %s\n",
  //       __func__, __LINE__, features, vdev->backend_features, vdev->name);
     //from_guest=130efffa7 backend=179ffffe7
@@ -2180,6 +2185,7 @@ static void virtio_net_set_status(struct VirtIODevice *vdev, uint8_t status)
         int r;
 
         n->vhost_started = 1;
+		printk(">>>>>%s:%d\n", __func__, __LINE__);
         r = vhost_net_start(vdev, n->my_sub_ncs, queues);
         if (r < 0) {
 			printk(">>>>>%s:%d\n", __func__, __LINE__);

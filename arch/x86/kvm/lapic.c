@@ -1780,6 +1780,7 @@ int kvm_lapic_reg_write(struct kvm_lapic *apic, u32 reg, u32 val)
 	case APIC_ICR:
 		/* No delay here, so we always clear the pending bit */
 		kvm_lapic_set_reg(apic, APIC_ICR, val & ~(1 << 12));
+//		printk(">>>>>>%s:%d\n", __func__, __LINE__);
 		apic_send_ipi(apic);
 		break;
 
@@ -2589,6 +2590,9 @@ void kvm_apic_accept_events(struct kvm_vcpu *vcpu)
 	u8 sipi_vector;
 	unsigned long pe;
 
+//	printk(">>>>>>%s:%d id=%d %lx\n", __func__, __LINE__,
+//		vcpu->vcpu_id, apic->pending_events);
+
 	if (!lapic_in_kernel(vcpu) || !apic->pending_events)
 		return;
 
@@ -2604,6 +2608,7 @@ void kvm_apic_accept_events(struct kvm_vcpu *vcpu)
 		return;
 	}
 
+//		printk(">>>>>>%s:%d id=%d\n", __func__, __LINE__, vcpu->vcpu_id);
 	pe = xchg(&apic->pending_events, 0);
 	if (test_bit(KVM_APIC_INIT, &pe)) {
 		kvm_vcpu_reset(vcpu, true);
@@ -2612,11 +2617,16 @@ void kvm_apic_accept_events(struct kvm_vcpu *vcpu)
 		else
 			vcpu->arch.mp_state = KVM_MP_STATE_INIT_RECEIVED;
 	}
+
+//		printk(">>>>>>%s:%d id=%d\n", __func__, __LINE__, vcpu->vcpu_id);
 	if (test_bit(KVM_APIC_SIPI, &pe) &&
 	    vcpu->arch.mp_state == KVM_MP_STATE_INIT_RECEIVED) {
 		/* evaluate pending_events before reading the vector */
 		smp_rmb();
 		sipi_vector = apic->sipi_vector;
+
+//	printk(">>>>>>%s:%d id=%d\n", __func__, __LINE__, vcpu->vcpu_id, sipi_vector);
+
 		apic_debug("vcpu %d received sipi with vector # %x\n",
 			 vcpu->vcpu_id, sipi_vector);
 		kvm_vcpu_deliver_sipi_vector(vcpu, sipi_vector);

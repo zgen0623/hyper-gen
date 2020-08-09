@@ -38,6 +38,12 @@
 
 #define GSI_COUNT 4095
 
+void free_huge_page(struct page *page);
+struct page *alloc_huge_page_node(struct hstate *h, int nid);
+void *my_vmalloc(unsigned long size);
+void my_vfree(const void *addr);
+kvm_pfn_t my_hva_to_pfn_memslot(unsigned long hva);
+
 static void set_gsi(struct kvm *kvm, unsigned int gsi)
 {
     set_bit(gsi, kvm->used_gsi_bitmap);
@@ -234,7 +240,7 @@ void init_env_possible_cpus(CPUX86State *env, struct kvm *kvm)
 
 uint64_t kernel_entry;
 
-static void load_linux_mini(struct kvm_vcpu *vcpu)
+static void load_linux_mini(struct kvm *kvm)
 {
     int i;
 	void *buf;
@@ -288,7 +294,7 @@ static void load_linux_mini(struct kvm_vcpu *vcpu)
 
 		addr = (uint8_t *)(buf + phdr->p_offset);
 
-		if (kvm_gfn_to_hva_cache_init(vcpu->kvm, &ghc, phdr->p_paddr, phdr->p_filesz)) {
+		if (kvm_gfn_to_hva_cache_init(kvm, &ghc, phdr->p_paddr, phdr->p_filesz)) {
 			printk(">>>>>fail to read file kernel file %s:%d\n", __func__, __LINE__);
 			return;
 		}
@@ -303,13 +309,13 @@ static void load_linux_mini(struct kvm_vcpu *vcpu)
 
 #define KERNEL_CMDLINE_ADDR  0x20000
 
-static void load_cmdline_mini(struct kvm_vcpu *vcpu)
+static void load_cmdline_mini(struct kvm *kvm)
 {
     const char *kernel_cmdline = KERNEL_CMDLINE;
     uint64_t len = strlen(kernel_cmdline) + 1;
 	struct gfn_to_hva_cache ghc;
 
-	if (kvm_gfn_to_hva_cache_init(vcpu->kvm, &ghc, KERNEL_CMDLINE_ADDR,
+	if (kvm_gfn_to_hva_cache_init(kvm, &ghc, KERNEL_CMDLINE_ADDR,
 			len)) {
 		printk(">>>>>fail to map kernel cmdline %s:%d\n", __func__, __LINE__);
 		return;
@@ -354,11 +360,11 @@ static uint8_t compute_checksum(void *base, size_t len)
 
 #define MPTABLE_BASE_ADDR  0x9fc00
 
-static void build_mptable_mini(struct kvm_vcpu *vcpu)
+static void build_mptable_mini(struct kvm *kvm)
 {
     int i;
     int pin;
-    const CPUArchIdList *possible_cpus = vcpu->kvm->possible_cpus;
+    const CPUArchIdList *possible_cpus = kvm->possible_cpus;
     struct mpc_table *mpc_table;
 	struct mpf_intel *mpf_intel;
 	struct mpc_cpu *mpc_cpu;
@@ -381,7 +387,7 @@ static void build_mptable_mini(struct kvm_vcpu *vcpu)
                     + sizeof(struct mpc_intsrc) * 16
                     + sizeof(struct mpc_lintsrc) * 2;
 
-	if (kvm_gfn_to_hva_cache_init(vcpu->kvm, &ghc, MPTABLE_BASE_ADDR,
+	if (kvm_gfn_to_hva_cache_init(kvm, &ghc, MPTABLE_BASE_ADDR,
 			len)) {
 		printk(">>>>>fail to map mptable %s:%d\n", __func__, __LINE__);
 		return;
@@ -557,7 +563,7 @@ static void add_e820_entry(struct _zeropage *params,
 #define KERNEL_HDR_MAGIC 0x53726448
 #define KERNEL_MIN_ALIGNMENT_BYTES 0x01000000
 
-static void build_bootparams_mini(struct kvm_vcpu *vcpu)
+static void build_bootparams_mini(struct kvm *kvm)
 {
     uint8_t *addr;
 	struct gfn_to_hva_cache ghc;
@@ -567,13 +573,14 @@ static void build_bootparams_mini(struct kvm_vcpu *vcpu)
     //mapping gpa of zeropage to hva
     len = sizeof(struct _zeropage);
 
-	if (kvm_gfn_to_hva_cache_init(vcpu->kvm, &ghc, ZERO_PAGE_START,
+	if (kvm_gfn_to_hva_cache_init(kvm, &ghc, ZERO_PAGE_START,
 			len)) {
 		printk(">>>>>fail to map zeropage %s:%d\n", __func__, __LINE__);
 		return;
 	}
 
 	addr = (uint8_t*)ghc.hva;
+	memset(addr, 0, len);
 
     boot_params = (struct _zeropage *)addr;
 
@@ -639,31 +646,31 @@ static void kvm_pc_setup_irq_routing(struct kvm *kvm)
 	return;
 }
 
-
-void init_virt_machine(struct kvm_vcpu *vcpu)
+static void create_vmem(struct kvm *kvm)
 {
-	INIT_LIST_HEAD(&vcpu->pci_bar_update_list);
+	struct kvm_userspace_memory_region mem;
 
-	if (vcpu->vcpu_id == 0) {
-		//the following should be done after memory setup
-		load_linux_mini(vcpu);
-		load_cmdline_mini(vcpu);
-		build_mptable_mini(vcpu);
-		build_bootparams_mini(vcpu);
+	mem.slot = 0 | (0UL << 16);
+	mem.memory_size = RAM_SIZE;
+	mem.guest_phys_addr = 0;
+	mem.userspace_addr = (u64)my_vmalloc(RAM_SIZE);
+	mem.flags = 0;
+
+#if 0
+	int i;
+	void *ptr = (void*)mem.userspace_addr;
+	for (i = 0; i < RAM_SIZE >> 12; i++) {
+		clear_page(ptr + i*PAGE_SIZE);
 	}
+#endif
 
-	//the folloing must be done after vmlinux loaded
-	init_vcpu_virt_regs(vcpu);
-
-	if (vcpu->vcpu_id == 0) {
-		create_vpci(vcpu->kvm);
-		create_vblk(vcpu->kvm);
-		create_vnet(vcpu->kvm);
-	}
+	kvm_set_memory_region(kvm, &mem);
 }
 
-void free_huge_page(struct page *page);
-struct page *alloc_huge_page_node(struct hstate *h, int nid);
+static void destroy_vmem(struct kvm *kvm)
+{
+
+}
 
 int create_virt_machine(struct kvm *kvm)
 {
@@ -719,14 +726,19 @@ int create_virt_machine(struct kvm *kvm)
 
 	INIT_LIST_HEAD(&kvm->evt_list);
 
-	//test hugetlb
-	struct page *page = alloc_huge_page_node(&default_hstate, numa_node_id());
-	
-	if (page) {
-		void *va = kmap(page);
-		printk(">>>>>>%s:%d va=%lx\n", __func__, __LINE__, va);
-		free_huge_page(page);
-	}
+	create_vmem(kvm);
+
+	//the following should be done after memory setup
+	load_linux_mini(kvm);
+	load_cmdline_mini(kvm);
+	build_mptable_mini(kvm);
+	build_bootparams_mini(kvm);
+
+	create_vpci(kvm);
+	create_vblk(kvm);
+	create_vnet(kvm);
+
+	printk(">>>>%s:%d\n", __func__, __LINE__);
 
 create_irqchip_unlock:
 	mutex_unlock(&kvm->lock);
@@ -743,6 +755,8 @@ void destroy_virt_machine(struct kvm *kvm)
 
 	kfree(kvm->irq_routes);
 	kfree(kvm->used_gsi_bitmap);
+
+	destroy_vmem(kvm);
 	printk(">>>>>%s:%d\n", __func__, __LINE__);
 }
 

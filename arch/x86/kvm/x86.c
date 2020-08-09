@@ -502,6 +502,7 @@ static void kvm_multiple_exception(struct kvm_vcpu *vcpu,
 	prev_nr = vcpu->arch.exception.nr;
 	if (prev_nr == DF_VECTOR) {
 		/* triple fault -> shutdown */
+		printk(">>>>>%s:%d\n", __func__, __LINE__);
 		kvm_make_request(KVM_REQ_TRIPLE_FAULT, vcpu);
 		return;
 	}
@@ -3362,6 +3363,7 @@ static int kvm_vcpu_ioctl_x86_set_mce(struct kvm_vcpu *vcpu,
 	if (mce->status & MCI_STATUS_UC) {
 		if ((vcpu->arch.mcg_status & MCG_STATUS_MCIP) ||
 		    !kvm_read_cr4_bits(vcpu, X86_CR4_MCE)) {
+			printk(">>>>>%s:%d\n", __func__, __LINE__);
 			kvm_make_request(KVM_REQ_TRIPLE_FAULT, vcpu);
 			return 0;
 		}
@@ -6617,10 +6619,27 @@ void kvm_vcpu_deactivate_apicv(struct kvm_vcpu *vcpu)
 	kvm_x86_ops->refresh_apicv_exec_ctrl(vcpu);
 }
 
+static int kvm_vm_print(struct kvm_vcpu *vcpu, unsigned long gpa)
+{
+	struct gfn_to_hva_cache ghc;
+
+	if (kvm_gfn_to_hva_cache_init(vcpu->kvm, &ghc, gpa, 128)) {
+		printk(">>>>>%s:%d\n", __func__, __LINE__);
+		return;
+	}
+
+	char *ptr = (char*)ghc.hva;
+
+	printk(">>>>%s", ptr);
+
+	return 0;
+}
+
 int kvm_emulate_hypercall(struct kvm_vcpu *vcpu)
 {
 	unsigned long nr, a0, a1, a2, a3, ret;
 	int op_64_bit;
+
 
 	if (kvm_hv_hypercall_enabled(vcpu->kvm)) {
 		if (!kvm_hv_hypercall(vcpu))
@@ -6663,6 +6682,9 @@ int kvm_emulate_hypercall(struct kvm_vcpu *vcpu)
 		ret = kvm_pv_clock_pairing(vcpu, a0, a1);
 		break;
 #endif
+	case KVM_HC_VM_PRINT:
+		ret = kvm_vm_print(vcpu, a0);
+		break;
 	default:
 		ret = -KVM_ENOSYS;
 		break;
@@ -7141,7 +7163,7 @@ void kvm_vcpu_reload_apic_access_page(struct kvm_vcpu *vcpu)
 	 * Do not pin apic access page in memory, the MMU notifier
 	 * will call us again if it is migrated or swapped out.
 	 */
-	put_page(page);
+//	put_page(page);
 }
 EXPORT_SYMBOL_GPL(kvm_vcpu_reload_apic_access_page);
 
@@ -7158,6 +7180,8 @@ static int vcpu_enter_guest(struct kvm_vcpu *vcpu)
 		kvm_cpu_accept_dm_intr(vcpu);
 
 	bool req_immediate_exit = false;
+
+//	printk(">>>>>>%s:%d id=%d\n", __func__, __LINE__, vcpu->vcpu_id);
 
 	if (kvm_request_pending(vcpu)) {
 		if (kvm_check_request(KVM_REQ_MMU_RELOAD, vcpu))
@@ -7183,6 +7207,7 @@ static int vcpu_enter_guest(struct kvm_vcpu *vcpu)
 			goto out;
 		}
 		if (kvm_check_request(KVM_REQ_TRIPLE_FAULT, vcpu)) {
+			printk(">>>>>%s:%d\n", __func__, __LINE__);
 			vcpu->run->exit_reason = KVM_EXIT_SHUTDOWN;
 			vcpu->mmio_needed = 0;
 			r = 0;
@@ -7364,7 +7389,14 @@ static int vcpu_enter_guest(struct kvm_vcpu *vcpu)
 		vcpu->arch.switch_db_regs &= ~KVM_DEBUGREG_RELOAD;
 	}
 
+
+
+
 	kvm_x86_ops->run(vcpu);
+
+
+
+
 
 	/*
 	 * Do this here before restoring debug registers on the host.  And
@@ -7614,8 +7646,10 @@ int kvm_arch_vcpu_ioctl_run(struct kvm_vcpu *vcpu, struct kvm_run *kvm_run)
 	kvm_sigset_activate(vcpu);
 
 	kvm_load_guest_fpu(vcpu);
+//	printk(">>>>>>%s:%d id=%d\n", __func__, __LINE__, vcpu->vcpu_id);
 
 	if (unlikely(vcpu->arch.mp_state == KVM_MP_STATE_UNINITIALIZED)) {
+//		printk(">>>>>>%s:%d id=%d\n", __func__, __LINE__, vcpu->vcpu_id);
 		if (kvm_run->immediate_exit) {
 			r = -EINTR;
 			goto out;
@@ -7643,8 +7677,11 @@ int kvm_arch_vcpu_ioctl_run(struct kvm_vcpu *vcpu, struct kvm_run *kvm_run)
 
 	if (kvm_run->immediate_exit)
 		r = -EINTR;
-	else
+	else {
+	//	if (vcpu->vcpu_id != 0)
+	//	printk(">>>>>>%s:%d id=%d\n", __func__, __LINE__, vcpu->vcpu_id);
 		r = vcpu_run(vcpu);
+	}
 
 out:
 	kvm_put_guest_fpu(vcpu);
@@ -8167,8 +8204,10 @@ void kvm_arch_vcpu_postcreate(struct kvm_vcpu *vcpu)
 	schedule_delayed_work(&kvm->arch.kvmclock_sync_work,
 					KVMCLOCK_SYNC_PERIOD);
 
-	init_virt_machine(vcpu);
+	INIT_LIST_HEAD(&vcpu->pci_bar_update_list);
 
+	//the folloing must be done after vmlinux loaded
+	init_vcpu_virt_regs(vcpu);
 }
 
 void kvm_arch_vcpu_destroy(struct kvm_vcpu *vcpu)
@@ -8429,8 +8468,10 @@ int kvm_arch_vcpu_init(struct kvm_vcpu *vcpu)
 	kvm_set_tsc_khz(vcpu, max_tsc_khz);
 
 	r = kvm_mmu_create(vcpu);
-	if (r < 0)
+	if (r < 0) {
+		printk(">>>>>%s:%d\n", __func__, __LINE__);
 		goto fail_free_pio_data;
+	}
 
 	if (irqchip_in_kernel(vcpu->kvm)) {
 		r = kvm_create_lapic(vcpu);
@@ -8491,7 +8532,9 @@ void kvm_arch_vcpu_uninit(struct kvm_vcpu *vcpu)
 	kfree(vcpu->arch.mce_banks);
 	kvm_free_lapic(vcpu);
 	idx = srcu_read_lock(&vcpu->kvm->srcu);
+
 	kvm_mmu_destroy(vcpu);
+
 	srcu_read_unlock(&vcpu->kvm->srcu, idx);
 	free_page((unsigned long)vcpu->arch.pio_data);
 	if (!lapic_in_kernel(vcpu))
@@ -8578,6 +8621,7 @@ static void kvm_free_vcpus(struct kvm *kvm)
 		kvm_clear_async_pf_completion_queue(vcpu);
 		kvm_unload_vcpu_mmu(vcpu);
 	}
+
 	kvm_for_each_vcpu(i, vcpu, kvm)
 		kvm_arch_vcpu_free(vcpu);
 
@@ -8608,6 +8652,7 @@ int __x86_set_memory_region(struct kvm *kvm, int id, gpa_t gpa, u32 size)
 		return -EINVAL;
 
 	slot = id_to_memslot(slots, id);
+
 	if (size) {
 		if (slot->npages)
 			return -EEXIST;
@@ -8616,10 +8661,11 @@ int __x86_set_memory_region(struct kvm *kvm, int id, gpa_t gpa, u32 size)
 		 * MAP_SHARED to prevent internal slot pages from being moved
 		 * by fork()/COW.
 		 */
-		hva = vm_mmap(NULL, 0, size, PROT_READ | PROT_WRITE,
-			      MAP_SHARED | MAP_ANONYMOUS, 0);
-		if (IS_ERR((void *)hva))
-			return PTR_ERR((void *)hva);
+//		hva = vm_mmap(NULL, 0, size, PROT_READ | PROT_WRITE,
+//			      MAP_SHARED | MAP_ANONYMOUS, 0);
+		hva = vmalloc(size);
+//		if (IS_ERR((void *)hva))
+//			return PTR_ERR((void *)hva);
 	} else {
 		if (!slot->npages)
 			return 0;
@@ -8637,12 +8683,15 @@ int __x86_set_memory_region(struct kvm *kvm, int id, gpa_t gpa, u32 size)
 		m.userspace_addr = hva;
 		m.memory_size = size;
 		r = __kvm_set_memory_region(kvm, &m);
-		if (r < 0)
+		if (r < 0) {
+			printk(">>>>>>%s:%d\n", __func__, __LINE__);
 			return r;
+		}
 	}
 
 	if (!size)
-		vm_munmap(old.userspace_addr, old.npages * PAGE_SIZE);
+		vfree(old.userspace_addr);
+	//	vm_munmap(old.userspace_addr, old.npages * PAGE_SIZE);
 
 	return 0;
 }
@@ -8669,23 +8718,29 @@ void kvm_arch_destroy_vm(struct kvm *kvm)
 {
 	destroy_virt_machine(kvm);
 
-	if (current->mm == kvm->mm) {
+//	if (current->mm == kvm->mm) {
 		/*
 		 * Free memory regions allocated on behalf of userspace,
 		 * unless the the memory map has changed due to process exit
 		 * or fd copying.
 		 */
-		x86_set_memory_region(kvm, APIC_ACCESS_PAGE_PRIVATE_MEMSLOT, 0, 0);
-		x86_set_memory_region(kvm, IDENTITY_PAGETABLE_PRIVATE_MEMSLOT, 0, 0);
-		x86_set_memory_region(kvm, TSS_PRIVATE_MEMSLOT, 0, 0);
-	}
+//		x86_set_memory_region(kvm, APIC_ACCESS_PAGE_PRIVATE_MEMSLOT, 0, 0);
+//		x86_set_memory_region(kvm, IDENTITY_PAGETABLE_PRIVATE_MEMSLOT, 0, 0);
+//		x86_set_memory_region(kvm, TSS_PRIVATE_MEMSLOT, 0, 0);
+//	}
+
 	if (kvm_x86_ops->vm_destroy)
 		kvm_x86_ops->vm_destroy(kvm);
+
 	kvm_pic_destroy(kvm);
 	kvm_ioapic_destroy(kvm);
+
 	kvm_free_vcpus(kvm);
+
 	kvfree(rcu_dereference_check(kvm->arch.apic_map, 1));
+
 	kvm_mmu_uninit_vm(kvm);
+
 	kvm_page_track_cleanup(kvm);
 }
 

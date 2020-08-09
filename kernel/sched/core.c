@@ -2692,6 +2692,7 @@ static struct rq *finish_task_switch(struct task_struct *prev)
 	fire_sched_in_preempt_notifiers(current);
 	if (mm)
 		mmdrop(mm);
+
 	if (unlikely(prev_state & (TASK_DEAD|TASK_PARKED))) {
 		switch (prev_state) {
 		case TASK_DEAD:

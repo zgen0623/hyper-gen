@@ -177,6 +177,7 @@ static inline p4d_t *p4d_alloc_one(struct mm_struct *mm, unsigned long addr)
 
 	if (mm == &init_mm)
 		gfp &= ~__GFP_ACCOUNT;
+
 	return (p4d_t *)get_zeroed_page(gfp);
 }
 

@@ -950,6 +950,7 @@ struct mm_struct *mm_alloc(void)
  * is dropped: either by a lazy thread or by
  * mmput. Free the page directory and the mm.
  */
+
 void __mmdrop(struct mm_struct *mm)
 {
 	BUG_ON(mm == &init_mm);

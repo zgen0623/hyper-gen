@@ -1500,6 +1500,7 @@ int target_submit_cmd_map_sgls(struct se_cmd *se_cmd, struct se_session *se_sess
 	ret = target_get_sess_cmd(se_cmd, flags & TARGET_SCF_ACK_KREF);
 	if (ret)
 		return ret;
+
 	/*
 	 * Signal bidirectional data payloads to target-core
 	 */
@@ -1563,6 +1564,7 @@ int target_submit_cmd_map_sgls(struct se_cmd *se_cmd, struct se_session *se_sess
 		rc = transport_generic_map_mem_to_cmd(se_cmd, sgl, sgl_count,
 				sgl_bidi, sgl_bidi_count);
 		if (rc != 0) {
+			printk(">>>>>%s:%d\n", __func__, __LINE__);
 			transport_generic_request_failure(se_cmd, rc);
 			return 0;
 		}
@@ -2304,8 +2306,10 @@ void target_free_sgl(struct scatterlist *sgl, int nents)
 	struct scatterlist *sg;
 	int count;
 
+#if 0
 	for_each_sg(sgl, sg, nents, count)
 		__free_page(sg_page(sg));
+#endif
 
 	kfree(sgl);
 }
@@ -2352,6 +2356,7 @@ static inline void transport_free_pages(struct se_cmd *cmd)
 	transport_reset_sgl_orig(cmd);
 
 	target_free_sgl(cmd->t_data_sg, cmd->t_data_nents);
+
 	cmd->t_data_sg = NULL;
 	cmd->t_data_nents = 0;
 
@@ -2371,12 +2376,14 @@ void *transport_kmap_data_sg(struct se_cmd *cmd)
 	 * tcm_loop who may be using a contig buffer from the SCSI midlayer for
 	 * control CDBs passed as SGLs via transport_generic_map_mem_to_cmd()
 	 */
-	if (!cmd->t_data_nents)
+	if (!cmd->t_data_nents) {
 		return NULL;
+	}
 
 	BUG_ON(!sg);
-	if (cmd->t_data_nents == 1)
+	if (cmd->t_data_nents == 1) {
 		return kmap(sg_page(sg)) + sg->offset;
+	}
 
 	/* >1 page. use vmap */
 	pages = kmalloc_array(cmd->t_data_nents, sizeof(*pages), GFP_KERNEL);
@@ -2390,8 +2397,10 @@ void *transport_kmap_data_sg(struct se_cmd *cmd)
 
 	cmd->t_data_vmap = vmap(pages, cmd->t_data_nents,  VM_MAP, PAGE_KERNEL);
 	kfree(pages);
-	if (!cmd->t_data_vmap)
+	if (!cmd->t_data_vmap) {
+		printk(">>>>%s:%d\n", __func__, __LINE__);
 		return NULL;
+	}
 
 	return cmd->t_data_vmap + cmd->t_data_sg[0].offset;
 }
@@ -2470,8 +2479,10 @@ transport_generic_new_cmd(struct se_cmd *cmd)
 	    !(cmd->se_cmd_flags & SCF_PASSTHROUGH_PROT_SG_TO_MEM_NOALLOC)) {
 		ret = target_alloc_sgl(&cmd->t_prot_sg, &cmd->t_prot_nents,
 				       cmd->prot_length, true, false);
-		if (ret < 0)
+		if (ret < 0) {
+			printk(">>>>>%s:%d\n", __func__, __LINE__);
 			return TCM_LOGICAL_UNIT_COMMUNICATION_FAILURE;
+		}
 	}
 
 	/*
@@ -2495,14 +2506,18 @@ transport_generic_new_cmd(struct se_cmd *cmd)
 			ret = target_alloc_sgl(&cmd->t_bidi_data_sg,
 					       &cmd->t_bidi_data_nents,
 					       bidi_length, zero_flag, false);
-			if (ret < 0)
+			if (ret < 0) {
+				printk(">>>>>%s:%d\n", __func__, __LINE__);
 				return TCM_LOGICAL_UNIT_COMMUNICATION_FAILURE;
+			}
 		}
 
 		ret = target_alloc_sgl(&cmd->t_data_sg, &cmd->t_data_nents,
 				       cmd->data_length, zero_flag, false);
-		if (ret < 0)
+		if (ret < 0) {
+			printk(">>>>>%s:%d\n", __func__, __LINE__);
 			return TCM_LOGICAL_UNIT_COMMUNICATION_FAILURE;
+		}
 	} else if ((cmd->se_cmd_flags & SCF_COMPARE_AND_WRITE) &&
 		    cmd->data_length) {
 		/*
@@ -2515,8 +2530,10 @@ transport_generic_new_cmd(struct se_cmd *cmd)
 		ret = target_alloc_sgl(&cmd->t_bidi_data_sg,
 				       &cmd->t_bidi_data_nents,
 				       caw_length, zero_flag, false);
-		if (ret < 0)
+		if (ret < 0) {
+			printk(">>>>>%s:%d\n", __func__, __LINE__);
 			return TCM_LOGICAL_UNIT_COMMUNICATION_FAILURE;
+		}
 	}
 	/*
 	 * If this command is not a write we can execute it right here,

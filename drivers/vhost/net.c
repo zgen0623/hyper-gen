@@ -36,6 +36,9 @@
 #include "vhost.h"
 
 unsigned int my_tun_alloc_notify(wait_queue_entry_t *wait, void *priv, void **ret);
+void my_iov_iter_init(struct iov_iter *i, int direction,
+			const struct iovec *iov, unsigned long nr_segs,
+			size_t count);
 
 static int experimental_zcopytx = 0;
 module_param(experimental_zcopytx, int, 0444);
@@ -578,7 +581,7 @@ static void handle_tx(struct vhost_net *net)
 		}
 		/* Skip header. TODO: support TSO. */
 		len = iov_length(vq->iov, out);
-		iov_iter_init(&msg.msg_iter, WRITE, vq->iov, out, len);
+		my_iov_iter_init(&msg.msg_iter, WRITE, vq->iov, out, len);
 		iov_iter_advance(&msg.msg_iter, hdr_size);
 		/* Sanity check */
 		if (!msg_data_left(&msg)) {
@@ -870,14 +873,14 @@ static void handle_rx(struct vhost_net *net)
 			msg.msg_control = vhost_net_buf_consume(&nvq->rxq);
 		/* On overrun, truncate and discard */
 		if (unlikely(headcount > UIO_MAXIOV)) {
-			iov_iter_init(&msg.msg_iter, READ, vq->iov, 1, 1);
+			my_iov_iter_init(&msg.msg_iter, READ, vq->iov, 1, 1);
 			err = sock->ops->recvmsg(sock, &msg,
 						 1, MSG_DONTWAIT | MSG_TRUNC);
 			pr_debug("Discarded rx packet: len %zd\n", sock_len);
 			continue;
 		}
 		/* We don't need to be notified again. */
-		iov_iter_init(&msg.msg_iter, READ, vq->iov, in, vhost_len);
+		my_iov_iter_init(&msg.msg_iter, READ, vq->iov, in, vhost_len);
 		fixup = msg.msg_iter;
 		if (unlikely((vhost_hlen))) {
 			/* We will supply the header ourselves
@@ -1240,11 +1243,14 @@ static long my_vhost_net_set_backend(struct vhost_net *n, unsigned index,
 	int r;
 
 	mutex_lock(&n->dev.mutex);
+#if 0
 	r = vhost_dev_check_owner(&n->dev);
 	if (r) {
-		printk(">>>>>%s:%d %lx %lx\n",__func__, __LINE__, n->dev.mm, current->mm);
+//		printk(">>>>>%s:%d %lx %lx\n",__func__, __LINE__, n->dev.mm, current->mm);
+		printk(">>>>>%s:%d\n",__func__, __LINE__);
 		goto err;
 	}
+#endif
 
 	if (index >= VHOST_NET_VQ_MAX) {
 		printk(">>>>>%s:%d\n",__func__, __LINE__);
@@ -1352,9 +1358,11 @@ static long vhost_net_reset_owner(struct vhost_net *n)
 	struct vhost_umem *umem;
 
 	mutex_lock(&n->dev.mutex);
+#if 0
 	err = vhost_dev_check_owner(&n->dev);
 	if (err)
 		goto done;
+#endif
 	umem = vhost_dev_reset_owner_prepare();
 	if (!umem) {
 		err = -ENOMEM;
@@ -1422,10 +1430,12 @@ static long vhost_net_set_owner(struct vhost_net *n)
 	int r;
 
 	mutex_lock(&n->dev.mutex);
+#if 0
 	if (vhost_dev_has_owner(&n->dev)) {
 		r = -EBUSY;
 		goto out;
 	}
+#endif
 	r = vhost_net_set_ubuf_info(n);
 	if (r)
 		goto out;

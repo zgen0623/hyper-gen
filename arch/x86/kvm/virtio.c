@@ -538,9 +538,11 @@ fail_features:
 void event_notifier_set(VirtQueue *vq)
 {
 	wait_queue_head_t *head = vq->wq_head;
- 
-	if (head != NULL)
+	//printk(">>>>%s:%d\n", __func__, __LINE__);
+	if (head != NULL) {
+	//	printk(">>>>%s:%d\n", __func__, __LINE__);
     	wake_up(head);
+	}
 }
 
 void *vhost_alloc_notify_evt_(uint64_t evt_id,
@@ -564,6 +566,8 @@ void *vhost_alloc_notify_evt_(uint64_t evt_id,
 			evt->vq->wq_head = head;
 		}
 	}
+
+	printk(">>>>>%s:%d evt_head=%lx\n",__func__, __LINE__, head);
 
 	return head;
 }
@@ -1401,6 +1405,8 @@ static int modern_bar_read(struct kvm_vcpu *vcpu, struct kvm_io_device *dev,
 	VirtIODevice *vdev = container_of(pci_dev, VirtIODevice, pci_dev);
 	uint32_t offset = addr - r->addr;	
 
+//	printk(">>>>>%s:%d\n", __func__, __LINE__);
+
 	_modern_bar_read(vdev, offset, val, len);
 
 	return 0;
@@ -1863,6 +1869,8 @@ static int modern_bar_write(struct kvm_vcpu *vcpu, struct kvm_io_device *dev,
 	PCIDevice *pci_dev = r->pci_dev;
 	VirtIODevice *vdev = container_of(pci_dev, VirtIODevice, pci_dev);
 	uint32_t offset = addr - r->addr;	
+
+//	printk(">>>>>%s:%d\n", __func__, __LINE__);
 
 	_modern_bar_write(vdev, offset, val, len);
 
