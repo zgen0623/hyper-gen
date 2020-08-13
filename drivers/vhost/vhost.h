@@ -168,6 +168,7 @@ struct vhost_msg_node {
 
 struct vhost_dev {
 //	struct mm_struct *mm;
+	bool owned;
 	struct mutex mutex;
 	struct vhost_virtqueue **vqs;
 	int nvqs;

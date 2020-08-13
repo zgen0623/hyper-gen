@@ -338,11 +338,19 @@ static void vhost_scsi_unrealize(VirtIODevice *vdev)
 
 void create_vblk(struct kvm *kvm)
 {
-	struct virt_pci_bridge *bridge = kvm->vdevices.vbridge;
-	struct virt_pci_bus *bus = bridge->bus;
+	struct virt_pci_bridge *bridge;
+	struct virt_pci_bus *bus;
 	PCIDevice *pci_dev;
     VirtIODevice *vdev;
     VHostSCSI *vs;
+
+	bridge = kvm->vdevices.vbridge;
+	if (!bridge) {
+		printk(">>>>>error %s:%d\n", __func__, __LINE__);
+		return;
+	}
+
+	bus = bridge->bus;
 
 	//create instance
 	vs = kzalloc(sizeof(VHostSCSI), GFP_KERNEL);
@@ -412,6 +420,11 @@ void destroy_vblk(struct kvm *kvm)
     VHostSCSI *vs;
 
 	vs = kvm->vdevices.vblock;
+	if (!vs) {
+		printk(">>>>%s:%d\n", __func__, __LINE__);
+		return;
+	}
+
 	vdev = &vs->parent_obj;
 	pci_dev = &vdev->pci_dev;
 

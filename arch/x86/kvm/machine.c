@@ -738,7 +738,7 @@ int create_virt_machine(struct kvm *kvm)
 	create_vblk(kvm);
 	create_vnet(kvm);
 
-	printk(">>>>%s:%d\n", __func__, __LINE__);
+//	printk(">>>>%s:%d\n", __func__, __LINE__);
 
 create_irqchip_unlock:
 	mutex_unlock(&kvm->lock);
@@ -749,14 +749,14 @@ void destroy_virt_machine(struct kvm *kvm)
 {
 	vfree(kvm->possible_cpus);
 
-	destroy_vblk(kvm);
 	destroy_vnet(kvm);
+	destroy_vblk(kvm);
 	destroy_vpci(kvm);
 
 	kfree(kvm->irq_routes);
 	kfree(kvm->used_gsi_bitmap);
 
 	destroy_vmem(kvm);
-	printk(">>>>>%s:%d\n", __func__, __LINE__);
+//	printk(">>>>>%s:%d\n", __func__, __LINE__);
 }
 

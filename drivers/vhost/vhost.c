@@ -359,9 +359,9 @@ static int vhost_worker(void *data)
 	struct vhost_dev *dev = data;
 	struct vhost_work *work, *work_next;
 	struct llist_node *node;
-	mm_segment_t oldfs = get_fs();
+//	mm_segment_t oldfs = get_fs();
 
-	set_fs(USER_DS);
+//	set_fs(USER_DS);
 //	use_mm(dev->mm);
 
 	for (;;) {
@@ -374,8 +374,10 @@ static int vhost_worker(void *data)
 		}
 
 		node = llist_del_all(&dev->work_list);
-		if (!node)
+		if (!node) {
+		//	printk(">>>>%s:%d\n", __func__, __LINE__);
 			schedule();
+		}
 
 		node = llist_reverse_order(node);
 		/* make sure flag is seen after deletion */
@@ -389,7 +391,7 @@ static int vhost_worker(void *data)
 		}
 	}
 //	unuse_mm(dev->mm);
-	set_fs(oldfs);
+//	set_fs(oldfs);
 	return 0;
 }
 
@@ -461,6 +463,7 @@ void vhost_dev_init(struct vhost_dev *dev,
 	mutex_init(&dev->mutex);
 	dev->log_ctx = NULL;
 	dev->log_file = NULL;
+	dev->owned = 0;
 	dev->umem = NULL;
 	dev->iotlb = NULL;
 //	dev->mm = NULL;
@@ -541,6 +544,10 @@ long vhost_dev_set_owner(struct vhost_dev *dev)
 	struct task_struct *worker;
 	int err;
 
+	if (dev->owned)
+		return;
+
+	dev->owned = true;
 #if 0
 	/* Is there an owner already? */
 	if (vhost_dev_has_owner(dev)) {
@@ -551,8 +558,13 @@ long vhost_dev_set_owner(struct vhost_dev *dev)
 
 	/* No owner, become one */
 //	dev->mm = get_task_mm(current);
+	static int cnt = 0;
+	char name[64];
+	sprintf(name, "vhost-%d", cnt++);
+	printk(">>>>%s:%d vhostd <%s> created\n", __func__, __LINE__, name);
 
-	worker = kthread_create(vhost_worker, dev, "vhost-%d", current->pid);
+//	worker = kthread_create(vhost_worker, dev, "vhost-%d", current->pid);
+	worker = kthread_create(vhost_worker, dev, name);
 	if (IS_ERR(worker)) {
 		err = PTR_ERR(worker);
 		goto err_worker;
@@ -561,9 +573,11 @@ long vhost_dev_set_owner(struct vhost_dev *dev)
 	dev->worker = worker;
 	wake_up_process(worker);	/* avoid contributing to loadavg */
 
+#if 0
 	err = vhost_attach_cgroups(dev);
 	if (err)
 		goto err_cgroup;
+#endif
 
 	err = vhost_dev_alloc_iovecs(dev);
 	if (err)
@@ -693,6 +707,7 @@ void vhost_dev_cleanup(struct vhost_dev *dev, bool locked)
 	if (dev->log_file)
 		fput(dev->log_file);
 	dev->log_file = NULL;
+	dev->owned = 0;
 	/* No one will access memory at this point */
 	vhost_umem_clean(dev->umem);
 	dev->umem = NULL;
