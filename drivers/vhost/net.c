@@ -35,10 +35,12 @@
 
 #include "vhost.h"
 
-unsigned int my_tun_alloc_notify(wait_queue_entry_t *wait, void *priv, void **ret);
+unsigned int my_tun_alloc_notify(poll_table *wait, void *priv);
 void my_iov_iter_init(struct iov_iter *i, int direction,
 			const struct iovec *iov, unsigned long nr_segs,
 			size_t count);
+int vhost_poll_wakeup(wait_queue_entry_t *wait, unsigned mode, int sync,
+			     void *key);
 
 static int experimental_zcopytx = 0;
 module_param(experimental_zcopytx, int, 0444);
@@ -121,7 +123,6 @@ struct vhost_net_virtqueue {
 	struct vhost_net_ubuf_ref *ubufs;
 	struct skb_array *rx_array;
 	struct vhost_net_buf rxq;
-	void *tun_priv;
 };
 
 struct vhost_net {
@@ -290,11 +291,6 @@ static void vhost_net_vq_reset(struct vhost_net *n)
 		nvq->ubufs = NULL;
 		nvq->vhost_hlen = 0;
 		nvq->sock_hlen = 0;
-		if (nvq->tun_priv) {
-			struct vhost_poll *poll = n->poll + (nvq - n->vqs);
-			remove_wait_queue(nvq->tun_priv, &poll->wait);
-			nvq->tun_priv = NULL;
-		}
 		vhost_net_buf_init(&nvq->rxq);
 	}
 
@@ -397,7 +393,6 @@ static bool vhost_can_busy_poll(unsigned long endtime)
 		      !signal_pending(current));
 }
 
-#if 1
 static void vhost_net_disable_vq(struct vhost_net *n,
 				 struct vhost_virtqueue *vq)
 {
@@ -409,25 +404,7 @@ static void vhost_net_disable_vq(struct vhost_net *n,
 
 	vhost_poll_stop(poll);
 }
-#endif
 
-static void my_vhost_net_disable_vq(struct vhost_net *n,
-				 struct vhost_virtqueue *vq)
-{
-	struct vhost_net_virtqueue *nvq =
-		container_of(vq, struct vhost_net_virtqueue, vq);
-	struct vhost_poll *poll = n->poll + (nvq - n->vqs);
-	wait_queue_head_t *head;
-
-	head = nvq->tun_priv;
-	if (!head)
-		return;
-
-	remove_wait_queue(head, &poll->wait);
-	nvq->tun_priv = NULL;
-}
-
-#if 1
 static int vhost_net_enable_vq(struct vhost_net *n,
 				struct vhost_virtqueue *vq)
 {
@@ -442,7 +419,6 @@ static int vhost_net_enable_vq(struct vhost_net *n,
 
 	return vhost_poll_start(poll, sock->file);
 }
-#endif
 
 static int my_vhost_net_enable_vq(struct vhost_net *n,
 				struct vhost_virtqueue *vq)
@@ -455,19 +431,16 @@ static int my_vhost_net_enable_vq(struct vhost_net *n,
 	unsigned int mask = 0;
 
 	sock = vq->private_data;
-	if (!sock || nvq->tun_priv)
+	if (!sock || poll->wqh)
 		return 0;
 
-	mask = my_tun_alloc_notify(&poll->wait, sock, &nvq->tun_priv);
+	mask = my_tun_alloc_notify(&poll->table, sock);
 
 	if (mask)
-		vhost_poll_queue(poll);
+		vhost_poll_wakeup(&poll->wait, 0, 0, (void *)mask);
 
 	if (mask & POLLERR) {
-		wait_queue_head_t *head;
-		head = nvq->tun_priv;
-		remove_wait_queue(head, &poll->wait);
-		nvq->tun_priv = NULL;
+		vhost_poll_stop(poll);
 		ret = -EINVAL;
 	}
 
@@ -545,7 +518,7 @@ static void handle_tx(struct vhost_net *net)
 		goto out;
 
 	vhost_disable_notify(&net->dev, vq);
-	my_vhost_net_disable_vq(net, vq);
+	vhost_net_disable_vq(net, vq);
 
 	hdr_size = nvq->vhost_hlen;
 	zcopy = nvq->ubufs;
@@ -835,7 +808,7 @@ static void handle_rx(struct vhost_net *net)
 		goto out;
 
 	vhost_disable_notify(&net->dev, vq);
-	my_vhost_net_disable_vq(net, vq);
+	vhost_net_disable_vq(net, vq);
 
 	vhost_hlen = nvq->vhost_hlen;
 	sock_hlen = nvq->sock_hlen;
@@ -1006,7 +979,6 @@ static int vhost_net_open(struct inode *inode, struct file *f)
 		n->vqs[i].done_idx = 0;
 		n->vqs[i].vhost_hlen = 0;
 		n->vqs[i].sock_hlen = 0;
-		n->vqs[i].tun_priv = NULL;
 		vhost_net_buf_init(&n->vqs[i].rxq);
 	}
 	vhost_dev_init(dev, vqs, VHOST_NET_VQ_MAX,
@@ -1058,7 +1030,6 @@ void *my_vhost_net_open(void)
 		n->vqs[i].done_idx = 0;
 		n->vqs[i].vhost_hlen = 0;
 		n->vqs[i].sock_hlen = 0;
-		n->vqs[i].tun_priv = NULL;
 		vhost_net_buf_init(&n->vqs[i].rxq);
 	}
 	vhost_dev_init(dev, vqs, VHOST_NET_VQ_MAX,
@@ -1079,7 +1050,7 @@ static struct socket *vhost_net_stop_vq(struct vhost_net *n,
 
 	mutex_lock(&vq->mutex);
 	sock = vq->private_data;
-	my_vhost_net_disable_vq(n, vq);
+	vhost_net_disable_vq(n, vq);
 	vq->private_data = NULL;
 	vhost_net_buf_unproduce(nvq);
 	mutex_unlock(&vq->mutex);
@@ -1287,7 +1258,7 @@ static long my_vhost_net_set_backend(struct vhost_net *n, unsigned index,
 			goto err_ubufs;
 		}
 
-		my_vhost_net_disable_vq(n, vq);
+		vhost_net_disable_vq(n, vq);
 		vq->private_data = sock;
 		vhost_net_buf_unproduce(nvq);
 		if (index == VHOST_NET_VQ_RX)

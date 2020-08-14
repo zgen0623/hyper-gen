@@ -1365,7 +1365,7 @@ static unsigned int tun_chr_poll(struct file *file, poll_table *wait)
 	return mask;
 }
 
-unsigned int my_tun_alloc_notify(wait_queue_entry_t *wait, void *priv, void **ret_head)
+unsigned int my_tun_alloc_notify(poll_table *wait, void *priv)
 {
 	struct socket *sock = priv;
 	struct sock *sk = sock->sk; 
@@ -1373,14 +1373,16 @@ unsigned int my_tun_alloc_notify(wait_queue_entry_t *wait, void *priv, void **re
 	struct tun_struct *tun = tun_get(tfile);
 
 	unsigned int mask = 0;
-	wait_queue_head_t *head;
+//	wait_queue_head_t *head;
 
 	if (!tun)
 		return POLLERR;
 
-	head = sk_sleep(sk);
-	add_wait_queue(head, wait);
-	*ret_head = head;
+//	head = sk_sleep(sk);
+//	add_wait_queue(head, wait);
+//	poll_wait(NULL, head, wait);
+//	*ret_head = head;
+	poll_wait(NULL, sk_sleep(sk), wait);
 
 	if (!skb_array_empty(&tfile->tx_array))
 		mask |= POLLIN | POLLRDNORM;

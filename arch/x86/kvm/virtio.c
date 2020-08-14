@@ -37,6 +37,7 @@
 #include <uapi/linux/virtio_pci.h>
 #include <uapi/linux/virtio_config.h>
 #include <linux/pci_ids.h>
+#include <uapi/asm-generic/poll.h>
 
 int kvm_ioeventfd(struct kvm *kvm, struct kvm_ioeventfd *args);
 void vhost_inject_virq_kvm(uint64_t kvm_id, void *priv);
@@ -538,10 +539,9 @@ fail_features:
 void event_notifier_set(VirtQueue *vq)
 {
 	wait_queue_head_t *head = vq->wq_head;
-	//printk(">>>>%s:%d\n", __func__, __LINE__);
+
 	if (head != NULL) {
-	//	printk(">>>>%s:%d\n", __func__, __LINE__);
-    	wake_up(head);
+		wake_up_poll(head, POLLIN);
 	}
 }
 

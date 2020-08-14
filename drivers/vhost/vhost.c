@@ -174,12 +174,16 @@ static void vhost_poll_func(struct file *file, wait_queue_head_t *wqh,
 	add_wait_queue(wqh, &poll->wait);
 }
 
-static int vhost_poll_wakeup(wait_queue_entry_t *wait, unsigned mode, int sync,
+int vhost_poll_wakeup(wait_queue_entry_t *wait, unsigned mode, int sync,
 			     void *key)
 {
 	struct vhost_poll *poll = container_of(wait, struct vhost_poll, wait);
 
+ 	if (!((unsigned long)key & poll->mask))
+ 		return 0;
+
 	vhost_poll_queue(poll);
+
 	return 0;
 }
 
@@ -247,7 +251,6 @@ EXPORT_SYMBOL_GPL(vhost_poll_stop);
 
 static void my_vhost_poll_stop(struct vhost_virtqueue *vq)
 {
-//	printk("%s:%d\n", __func__, __LINE__);
 	vq->notify_status = -1;
 	kfree(vq->notify_priv);
 	vq->notify_priv = NULL;
@@ -545,7 +548,7 @@ long vhost_dev_set_owner(struct vhost_dev *dev)
 	int err;
 
 	if (dev->owned)
-		return;
+		return -EBUSY;
 
 	dev->owned = true;
 #if 0
