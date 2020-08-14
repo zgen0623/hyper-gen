@@ -78,42 +78,6 @@ static void vhost_enable_cross_endian_little(struct vhost_virtqueue *vq)
 	vq->user_be = false;
 }
 
-static long vhost_set_vring_endian(struct vhost_virtqueue *vq, int __user *argp)
-{
-	struct vhost_vring_state s;
-
-	if (vq->private_data)
-		return -EBUSY;
-
-	if (copy_from_user(&s, argp, sizeof(s)))
-		return -EFAULT;
-
-	if (s.num != VHOST_VRING_LITTLE_ENDIAN &&
-	    s.num != VHOST_VRING_BIG_ENDIAN)
-		return -EINVAL;
-
-	if (s.num == VHOST_VRING_BIG_ENDIAN)
-		vhost_enable_cross_endian_big(vq);
-	else
-		vhost_enable_cross_endian_little(vq);
-
-	return 0;
-}
-
-static long vhost_get_vring_endian(struct vhost_virtqueue *vq, u32 idx,
-				   int __user *argp)
-{
-	struct vhost_vring_state s = {
-		.index = idx,
-		.num = vq->user_be
-	};
-
-	if (copy_to_user(argp, &s, sizeof(s)))
-		return -EFAULT;
-
-	return 0;
-}
-
 static void vhost_init_is_le(struct vhost_virtqueue *vq)
 {
 	/* Note for legacy virtio: user_be is initialized at reset time
@@ -126,17 +90,6 @@ static void vhost_init_is_le(struct vhost_virtqueue *vq)
 #else
 static void vhost_disable_cross_endian(struct vhost_virtqueue *vq)
 {
-}
-
-static long vhost_set_vring_endian(struct vhost_virtqueue *vq, int __user *argp)
-{
-	return -ENOIOCTLCMD;
-}
-
-static long vhost_get_vring_endian(struct vhost_virtqueue *vq, u32 idx,
-				   int __user *argp)
-{
-	return -ENOIOCTLCMD;
 }
 
 static void vhost_init_is_le(struct vhost_virtqueue *vq)
@@ -345,7 +298,6 @@ static void vhost_vq_reset(struct vhost_dev *dev,
 	vq->log_base = NULL;
 	vq->error_ctx = NULL;
 	vq->error = NULL;
-	//vq->kick = NULL;
 	vq->call_ctx = NULL;
 	vq->call = NULL;
 	vq->log_ctx = NULL;
@@ -362,10 +314,6 @@ static int vhost_worker(void *data)
 	struct vhost_dev *dev = data;
 	struct vhost_work *work, *work_next;
 	struct llist_node *node;
-//	mm_segment_t oldfs = get_fs();
-
-//	set_fs(USER_DS);
-//	use_mm(dev->mm);
 
 	for (;;) {
 		/* mb paired w/ kthread_stop */
@@ -377,10 +325,8 @@ static int vhost_worker(void *data)
 		}
 
 		node = llist_del_all(&dev->work_list);
-		if (!node) {
-		//	printk(">>>>%s:%d\n", __func__, __LINE__);
+		if (!node)
 			schedule();
-		}
 
 		node = llist_reverse_order(node);
 		/* make sure flag is seen after deletion */
@@ -393,8 +339,7 @@ static int vhost_worker(void *data)
 				schedule();
 		}
 	}
-//	unuse_mm(dev->mm);
-//	set_fs(oldfs);
+
 	return 0;
 }
 
@@ -469,7 +414,6 @@ void vhost_dev_init(struct vhost_dev *dev,
 	dev->owned = 0;
 	dev->umem = NULL;
 	dev->iotlb = NULL;
-//	dev->mm = NULL;
 	dev->worker = NULL;
 	dev->weight = weight;
 	dev->byte_weight = byte_weight;
@@ -478,7 +422,6 @@ void vhost_dev_init(struct vhost_dev *dev,
 	INIT_LIST_HEAD(&dev->read_list);
 	INIT_LIST_HEAD(&dev->pending_list);
 	spin_lock_init(&dev->iotlb_lock);
-
 
 	for (i = 0; i < dev->nvqs; ++i) {
 		vq = dev->vqs[i];
@@ -497,50 +440,6 @@ void vhost_dev_init(struct vhost_dev *dev,
 }
 EXPORT_SYMBOL_GPL(vhost_dev_init);
 
-#if 0
-/* Caller should have device mutex */
-long vhost_dev_check_owner(struct vhost_dev *dev)
-{
-	/* Are you the owner? If not, I don't think you mean to do that */
-	return dev->mm == current->mm ? 0 : -EPERM;
-}
-EXPORT_SYMBOL_GPL(vhost_dev_check_owner);
-#endif
-
-struct vhost_attach_cgroups_struct {
-	struct vhost_work work;
-	struct task_struct *owner;
-	int ret;
-};
-
-static void vhost_attach_cgroups_work(struct vhost_work *work)
-{
-	struct vhost_attach_cgroups_struct *s;
-
-	s = container_of(work, struct vhost_attach_cgroups_struct, work);
-	s->ret = cgroup_attach_task_all(s->owner, current);
-}
-
-static int vhost_attach_cgroups(struct vhost_dev *dev)
-{
-	struct vhost_attach_cgroups_struct attach;
-
-	attach.owner = current;
-	vhost_work_init(&attach.work, vhost_attach_cgroups_work);
-	vhost_work_queue(dev, &attach.work);
-	vhost_work_flush(dev, &attach.work);
-	return attach.ret;
-}
-
-#if 0
-/* Caller should have device mutex */
-bool vhost_dev_has_owner(struct vhost_dev *dev)
-{
-	return dev->mm;
-}
-EXPORT_SYMBOL_GPL(vhost_dev_has_owner);
-#endif
-
 /* Caller should have device mutex */
 long vhost_dev_set_owner(struct vhost_dev *dev)
 {
@@ -551,23 +450,10 @@ long vhost_dev_set_owner(struct vhost_dev *dev)
 		return -EBUSY;
 
 	dev->owned = true;
-#if 0
-	/* Is there an owner already? */
-	if (vhost_dev_has_owner(dev)) {
-		err = -EBUSY;
-		goto err_mm;
-	}
-#endif
 
 	/* No owner, become one */
-//	dev->mm = get_task_mm(current);
-	static int cnt = 0;
-	char name[64];
-	sprintf(name, "vhost-%d", cnt++);
-	printk(">>>>%s:%d vhostd <%s> created\n", __func__, __LINE__, name);
+	worker = kthread_create(vhost_worker, dev, "vhost-%d", current->pid);
 
-//	worker = kthread_create(vhost_worker, dev, "vhost-%d", current->pid);
-	worker = kthread_create(vhost_worker, dev, name);
 	if (IS_ERR(worker)) {
 		err = PTR_ERR(worker);
 		goto err_worker;
@@ -575,12 +461,6 @@ long vhost_dev_set_owner(struct vhost_dev *dev)
 
 	dev->worker = worker;
 	wake_up_process(worker);	/* avoid contributing to loadavg */
-
-#if 0
-	err = vhost_attach_cgroups(dev);
-	if (err)
-		goto err_cgroup;
-#endif
 
 	err = vhost_dev_alloc_iovecs(dev);
 	if (err)
@@ -591,12 +471,6 @@ err_cgroup:
 	kthread_stop(worker);
 	dev->worker = NULL;
 err_worker:
-#if 0
-	if (dev->mm)
-		mmput(dev->mm);
-	dev->mm = NULL;
-#endif
-err_mm:
 	return err;
 }
 EXPORT_SYMBOL_GPL(vhost_dev_set_owner);
@@ -723,64 +597,8 @@ void vhost_dev_cleanup(struct vhost_dev *dev, bool locked)
 		kthread_stop(dev->worker);
 		dev->worker = NULL;
 	}
-#if 0
-	if (dev->mm)
-		mmput(dev->mm);
-	dev->mm = NULL;
-#endif
 }
 EXPORT_SYMBOL_GPL(vhost_dev_cleanup);
-
-static int log_access_ok(void __user *log_base, u64 addr, unsigned long sz)
-{
-#if 0
-	u64 a = addr / VHOST_PAGE_SIZE / 8;
-
-	/* Make sure 64 bit math will not overflow. */
-	if (a > ULONG_MAX - (unsigned long)log_base ||
-	    a + (unsigned long)log_base > ULONG_MAX)
-		return 0;
-
-	return access_ok(VERIFY_WRITE, log_base + a,
-			 (sz + VHOST_PAGE_SIZE * 8 - 1) / VHOST_PAGE_SIZE / 8);
-#endif
-	return 1;
-}
-
-static bool vhost_overflow(u64 uaddr, u64 size)
-{
-	/* Make sure 64 bit math will not overflow. */
-	return uaddr > ULONG_MAX || size > ULONG_MAX || uaddr > ULONG_MAX - size;
-}
-
-/* Caller should have vq mutex and device mutex. */
-static int vq_memory_access_ok(void __user *log_base, struct vhost_umem *umem,
-			       int log_all)
-{
-#if 0
-	struct vhost_umem_node *node;
-
-	if (!umem)
-		return 0;
-
-	list_for_each_entry(node, &umem->umem_list, link) {
-		unsigned long a = node->userspace_addr;
-
-		if (vhost_overflow(node->userspace_addr, node->size))
-			return 0;
-
-
-		if (!access_ok(VERIFY_WRITE, (void __user *)a,
-				    node->size))
-			return 0;
-		else if (log_all && !log_access_ok(log_base,
-						   node->start,
-						   node->size))
-			return 0;
-	}
-#endif
-	return 1;
-}
 
 static inline void *vhost_vq_meta_fetch(struct vhost_virtqueue *vq,
 					       u64 addr, unsigned int size,
@@ -792,34 +610,6 @@ static inline void *vhost_vq_meta_fetch(struct vhost_virtqueue *vq,
 		return NULL;
 
 	return (void *)(uintptr_t)(node->userspace_addr + addr - node->start);
-}
-
-/* Can we switch to this memory table? */
-/* Caller should have device mutex but not vq mutex */
-static int memory_access_ok(struct vhost_dev *d, struct vhost_umem *umem,
-			    int log_all)
-{
-#if 0
-	int i;
-
-	for (i = 0; i < d->nvqs; ++i) {
-		int ok;
-		bool log;
-
-		mutex_lock(&d->vqs[i]->mutex);
-		log = log_all || vhost_has_feature(d->vqs[i], VHOST_F_LOG_ALL);
-		/* If ring is inactive, will check when it's enabled. */
-		if (d->vqs[i]->private_data)
-			ok = vq_memory_access_ok(d->vqs[i]->log_base,
-						 umem, log);
-		else
-			ok = 1;
-		mutex_unlock(&d->vqs[i]->mutex);
-		if (!ok)
-			return 0;
-	}
-#endif
-	return 1;
 }
 
 static int translate_desc(struct vhost_virtqueue *vq, u64 addr, u32 len,
@@ -903,20 +693,6 @@ static void vhost_iotlb_notify_vq(struct vhost_dev *d,
 
 static int umem_access_ok(u64 uaddr, u64 size, int access)
 {
-#if 0
-	unsigned long a = uaddr;
-
-	/* Make sure 64 bit math will not overflow. */
-	if (vhost_overflow(uaddr, size))
-		return -EFAULT;
-
-	if ((access & VHOST_ACCESS_RO) &&
-	    !access_ok(VERIFY_READ, (void __user *)a, size))
-		return -EFAULT;
-	if ((access & VHOST_ACCESS_WO) &&
-	    !access_ok(VERIFY_WRITE, (void __user *)a, size))
-		return -EFAULT;
-#endif
 	return 0;
 }
 
@@ -1082,91 +858,8 @@ static int vhost_iotlb_miss(struct vhost_virtqueue *vq, u64 iova, int access)
 	return 0;
 }
 
-static int vq_access_ok(struct vhost_virtqueue *vq, unsigned int num,
-			struct vring_desc __user *desc,
-			struct vring_avail __user *avail,
-			struct vring_used __user *used)
-
-{
-#if 0
-	size_t s = vhost_has_feature(vq, VIRTIO_RING_F_EVENT_IDX) ? 2 : 0;
-
-	return access_ok(VERIFY_READ, desc, num * sizeof *desc) &&
-	       access_ok(VERIFY_READ, avail,
-			 sizeof *avail + num * sizeof *avail->ring + s) &&
-	       access_ok(VERIFY_WRITE, used,
-			sizeof *used + num * sizeof *used->ring + s);
-#endif
-	return 1;
-}
-
-static void vhost_vq_meta_update(struct vhost_virtqueue *vq,
-				 const struct vhost_umem_node *node,
-				 int type)
-{
-	int access = (type == VHOST_ADDR_USED) ?
-		     VHOST_ACCESS_WO : VHOST_ACCESS_RO;
-
-	if (likely(node->perm & access))
-		vq->meta_iotlb[type] = node;
-}
-
-static int iotlb_access_ok(struct vhost_virtqueue *vq,
-			   int access, u64 addr, u64 len, int type)
-{
-	const struct vhost_umem_node *node;
-	struct vhost_umem *umem = vq->iotlb;
-	u64 s = 0, size, orig_addr = addr, last = addr + len - 1;
-
-	if (vhost_vq_meta_fetch(vq, addr, len, type))
-		return true;
-
-	while (len > s) {
-		node = vhost_umem_interval_tree_iter_first(&umem->umem_tree,
-							   addr,
-							   last);
-		if (node == NULL || node->start > addr) {
-			vhost_iotlb_miss(vq, addr, access);
-			return false;
-		} else if (!(node->perm & access)) {
-			/* Report the possible access violation by
-			 * request another translation from userspace.
-			 */
-			return false;
-		}
-
-		size = node->size - addr + node->start;
-
-		if (orig_addr == addr && size >= len)
-			vhost_vq_meta_update(vq, node, type);
-
-		s += size;
-		addr += size;
-	}
-
-	return true;
-}
-
 int vq_iotlb_prefetch(struct vhost_virtqueue *vq)
 {
-	size_t s = vhost_has_feature(vq, VIRTIO_RING_F_EVENT_IDX) ? 2 : 0;
-	unsigned int num = vq->num;
-
-	if (!vq->iotlb)
-		return 1;
-
-#if 0
-	return iotlb_access_ok(vq, VHOST_ACCESS_RO, (u64)(uintptr_t)vq->desc,
-			       num * sizeof(*vq->desc), VHOST_ADDR_DESC) &&
-	       iotlb_access_ok(vq, VHOST_ACCESS_RO, (u64)(uintptr_t)vq->avail,
-			       sizeof *vq->avail +
-			       num * sizeof(*vq->avail->ring) + s,
-			       VHOST_ADDR_AVAIL) &&
-	       iotlb_access_ok(vq, VHOST_ACCESS_WO, (u64)(uintptr_t)vq->used,
-			       sizeof *vq->used +
-			       num * sizeof(*vq->used->ring) + s,
-			       VHOST_ADDR_USED);
-#endif
 	return 1;
 }
 EXPORT_SYMBOL_GPL(vq_iotlb_prefetch);
@@ -1175,7 +868,6 @@ EXPORT_SYMBOL_GPL(vq_iotlb_prefetch);
 /* Caller should have device mutex but not vq mutex */
 int vhost_log_access_ok(struct vhost_dev *dev)
 {
-//	return memory_access_ok(dev, dev->umem, 1);
 	return 1;
 }
 EXPORT_SYMBOL_GPL(vhost_log_access_ok);
@@ -1185,15 +877,6 @@ EXPORT_SYMBOL_GPL(vhost_log_access_ok);
 static int vq_log_access_ok(struct vhost_virtqueue *vq,
 			    void __user *log_base)
 {
-#if 0
-	size_t s = vhost_has_feature(vq, VIRTIO_RING_F_EVENT_IDX) ? 2 : 0;
-
-	return vq_memory_access_ok(log_base, vq->umem,
-				   vhost_has_feature(vq, VHOST_F_LOG_ALL)) &&
-		(!vq->log_used || log_access_ok(log_base, vq->log_addr,
-					sizeof *vq->used +
-					vq->num * sizeof *vq->used->ring + s));
-#endif
 	return 1;
 }
 
@@ -1201,16 +884,6 @@ static int vq_log_access_ok(struct vhost_virtqueue *vq,
 /* Caller should have vq mutex and device mutex */
 int vhost_vq_access_ok(struct vhost_virtqueue *vq)
 {
-#if 0
-	if (!vq_log_access_ok(vq, vq->log_base))
-		return 0;
-
-	/* Access validation occurs at prefetch time with IOTLB */
-	if (vq->iotlb)
-		return 1;
-
-	return vq_access_ok(vq, vq->num, vq->desc, vq->avail, vq->used);
-#endif
 	return 1;
 }
 EXPORT_SYMBOL_GPL(vhost_vq_access_ok);
@@ -1303,7 +976,6 @@ long vhost_vring_ioctl(struct vhost_dev *d, int ioctl, void __user *argp)
 	return 0;
 }
 EXPORT_SYMBOL_GPL(vhost_vring_ioctl);
-
 
 long my_vhost_vring_ioctl(struct vhost_dev *d, int ioctl, void *argp)
 {
@@ -1512,13 +1184,6 @@ long my_vhost_dev_ioctl(struct vhost_dev *d, unsigned int ioctl, void *argp)
 		r = vhost_dev_set_owner(d);
 		goto done;
 	}
-
-#if 0
-	/* You must be the owner to do anything else */
-	r = vhost_dev_check_owner(d);
-	if (r)
-		goto done;
-#endif
 
 	switch (ioctl) {
 	case VHOST_SET_MEM_TABLE:
@@ -1866,7 +1531,6 @@ static int get_indirect(struct vhost_virtqueue *vq,
 	}
 
 	my_iov_iter_init(&from, READ, vq->indirect, ret, len);
-//	printk(">>>>>%s:%d type=%lx ret=%d\n", __func__, __LINE__, from.type, ret);
 
 	/* We will use the result as an address to read from, so most
 	 * architectures only need a compiler barrier here. */
@@ -2368,21 +2032,3 @@ struct vhost_msg_node *vhost_dequeue_msg(struct vhost_dev *dev,
 	return node;
 }
 EXPORT_SYMBOL_GPL(vhost_dequeue_msg);
-
-
-static int __init vhost_init(void)
-{
-	return 0;
-}
-
-static void __exit vhost_exit(void)
-{
-}
-
-module_init(vhost_init);
-module_exit(vhost_exit);
-
-MODULE_VERSION("0.0.1");
-MODULE_LICENSE("GPL v2");
-MODULE_AUTHOR("Michael S. Tsirkin");
-MODULE_DESCRIPTION("Host kernel accelerator for virtio");

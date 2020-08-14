@@ -324,19 +324,6 @@ static void vhost_scsi_release_cmd(struct se_cmd *se_cmd)
 	struct vhost_scsi_cmd *tv_cmd = container_of(se_cmd,
 				struct vhost_scsi_cmd, tvc_se_cmd);
 	struct se_session *se_sess = tv_cmd->tvc_nexus->tvn_se_sess;
-	int i;
-
-#if 0
-	if (tv_cmd->tvc_sgl_count) {
-		for (i = 0; i < tv_cmd->tvc_sgl_count; i++)
-			put_page(sg_page(&tv_cmd->tvc_sgl[i]));
-	}
-
-	if (tv_cmd->tvc_prot_sgl_count) {
-		for (i = 0; i < tv_cmd->tvc_prot_sgl_count; i++)
-			put_page(sg_page(&tv_cmd->tvc_prot_sgl[i]));
-	}
-#endif
 
 	vhost_scsi_put_inflight(tv_cmd->inflight);
 	percpu_ida_free(&se_sess->sess_tag_pool, se_cmd->map_tag);
@@ -455,10 +442,9 @@ vhost_scsi_do_evt_work(struct vhost_scsi *vs, struct vhost_scsi_evt *evt)
 {
 	struct vhost_virtqueue *vq = &vs->vqs[VHOST_SCSI_VQ_EVT].vq;
 	struct virtio_scsi_event *event = &evt->event;
-//	struct virtio_scsi_event __user *eventp;
 	struct virtio_scsi_event *eventp;
 	unsigned out, in;
-	int head, ret;
+	int head;
 
 	if (!vq->private_data) {
 		vs->vs_events_missed = true;
@@ -497,13 +483,6 @@ again:
 
 	memcpy(eventp, event, sizeof(*event));
 	vhost_add_used_and_signal(&vs->dev, vq, head, 0);
-#if 0
-	ret = __copy_to_user(eventp, event, sizeof(*event));
-	if (!ret)
-		vhost_add_used_and_signal(&vs->dev, vq, head, 0);
-	else
-		vq_err(vq, "Faulted on vhost_scsi_send_event\n");
-#endif
 }
 
 static void vhost_scsi_evt_work(struct vhost_work *work)
@@ -689,21 +668,12 @@ vhost_scsi_iov_to_sgl(struct vhost_scsi_cmd *cmd, bool write,
 		      struct iov_iter *iter,
 		      struct scatterlist *sg, int sg_count)
 {
-	struct scatterlist *p = sg;
 	int ret;
 
 	while (iov_iter_count(iter)) {
 		ret = vhost_scsi_map_to_sgl(cmd, iter, sg, write);
-		if (ret < 0) {
-#if 0
-			while (p < sg) {
-				struct page *page = sg_page(p++);
-				if (page)
-					put_page(page);
-			}
-#endif
+		if (ret < 0)
 			return ret;
-		}
 		sg += ret;
 	}
 	return 0;
@@ -822,10 +792,8 @@ vhost_scsi_send_bad_target(struct vhost_scsi *vs,
 			   struct vhost_virtqueue *vq,
 			   int head, unsigned out)
 {
-//	struct virtio_scsi_cmd_resp __user *resp;
 	struct virtio_scsi_cmd_resp *resp;
 	struct virtio_scsi_cmd_resp rsp;
-	int ret;
 
 	memset(&rsp, 0, sizeof(rsp));
 	rsp.response = VIRTIO_SCSI_S_BAD_TARGET;
@@ -833,14 +801,6 @@ vhost_scsi_send_bad_target(struct vhost_scsi *vs,
 
 	memcpy(resp, &rsp, sizeof(rsp));
 	vhost_add_used_and_signal(&vs->dev, vq, head, 0);
-
-#if 0
-	ret = __copy_to_user(resp, &rsp, sizeof(rsp));
-	if (!ret)
-		vhost_add_used_and_signal(&vs->dev, vq, head, 0);
-	else
-		pr_err("Faulted on virtio_scsi_cmd_resp\n");
-#endif
 }
 
 static void
@@ -1216,7 +1176,7 @@ vhost_scsi_set_endpoint(struct vhost_scsi *vs,
 	struct vhost_scsi_tpg *tpg;
 	struct vhost_scsi_tpg **vs_tpg;
 	struct vhost_virtqueue *vq;
-	int index, ret, i, len;
+	int ret, i, len;
 	bool match = false;
 
 	mutex_lock(&vhost_scsi_mutex);
@@ -1231,8 +1191,6 @@ vhost_scsi_set_endpoint(struct vhost_scsi *vs,
 	}
 	if (vs->vs_tpg)
 		memcpy(vs_tpg, vs->vs_tpg, len);
-
-
 
 	list_for_each_entry(tpg, &vhost_scsi_list, tv_tpg_list) {
 		mutex_lock(&tpg->tv_tpg_mutex);
@@ -1317,7 +1275,7 @@ vhost_scsi_clear_endpoint(struct vhost_scsi *vs,
 	struct vhost_scsi_tpg *tpg;
 	struct vhost_virtqueue *vq;
 	bool match = false;
-	int index, ret, i;
+	int ret, i;
 	u8 target;
 
 	mutex_lock(&vhost_scsi_mutex);
@@ -1418,7 +1376,7 @@ void *my_vhost_scsi_open(void)
 {
 	struct vhost_scsi *vs;
 	struct vhost_virtqueue **vqs;
-	int r = -ENOMEM, i;
+	int i;
 
 	vs = kzalloc(sizeof(*vs), GFP_KERNEL | __GFP_NOWARN | __GFP_RETRY_MAYFAIL);
 	if (!vs) {
@@ -1481,7 +1439,7 @@ my_vhost_scsi_ioctl(void *opaque,
 		 unsigned long arg)
 {
 	struct vhost_scsi *vs = opaque;
-	void *argp = arg;
+	void *argp = (void*)arg;
 	u64 *featurep = argp;
 	u32 *eventsp = argp;
 	u32 events_missed;

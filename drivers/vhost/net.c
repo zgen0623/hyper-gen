@@ -41,6 +41,9 @@ void my_iov_iter_init(struct iov_iter *i, int direction,
 			size_t count);
 int vhost_poll_wakeup(wait_queue_entry_t *wait, unsigned mode, int sync,
 			     void *key);
+struct socket *my_tun_get_socket(void *tap_priv);
+struct skb_array *my_tun_get_skb_array(void *tap_priv);
+
 
 static int experimental_zcopytx = 0;
 module_param(experimental_zcopytx, int, 0444);
@@ -405,21 +408,6 @@ static void vhost_net_disable_vq(struct vhost_net *n,
 	vhost_poll_stop(poll);
 }
 
-static int vhost_net_enable_vq(struct vhost_net *n,
-				struct vhost_virtqueue *vq)
-{
-	struct vhost_net_virtqueue *nvq =
-		container_of(vq, struct vhost_net_virtqueue, vq);
-	struct vhost_poll *poll = n->poll + (nvq - n->vqs);
-	struct socket *sock;
-
-	sock = vq->private_data;
-	if (!sock)
-		return 0;
-
-	return vhost_poll_start(poll, sock->file);
-}
-
 static int my_vhost_net_enable_vq(struct vhost_net *n,
 				struct vhost_virtqueue *vq)
 {
@@ -428,7 +416,7 @@ static int my_vhost_net_enable_vq(struct vhost_net *n,
 		container_of(vq, struct vhost_net_virtqueue, vq);
 	struct vhost_poll *poll = n->poll + (nvq - n->vqs);
 	struct socket *sock;
-	unsigned int mask = 0;
+	unsigned long mask = 0;
 
 	sock = vq->private_data;
 	if (!sock || poll->wqh)
@@ -1140,25 +1128,6 @@ err:
 	return ERR_PTR(r);
 }
 
-static struct skb_array *get_tap_skb_array(int fd)
-{
-	struct skb_array *array;
-	struct file *file = fget(fd);
-
-	if (!file)
-		return NULL;
-	array = tun_get_skb_array(file);
-	if (!IS_ERR(array))
-		goto out;
-	array = tap_get_skb_array(file);
-	if (!IS_ERR(array))
-		goto out;
-	array = NULL;
-out:
-	fput(file);
-	return array;
-}
-
 static struct socket *get_tap_socket(int fd)
 {
 	struct file *file = fget(fd);
@@ -1174,25 +1143,6 @@ static struct socket *get_tap_socket(int fd)
 		fput(file);
 	return sock;
 }
-
-static struct socket *get_socket(int fd)
-{
-	struct socket *sock;
-
-	/* special case to disable backend */
-	if (fd == -1)
-		return NULL;
-	sock = get_raw_socket(fd);
-	if (!IS_ERR(sock))
-		return sock;
-	sock = get_tap_socket(fd);
-	if (!IS_ERR(sock))
-		return sock;
-	return ERR_PTR(-ENOTSOCK);
-}
-
-struct socket *my_tun_get_socket(void *tap_priv);
-struct skb_array *my_tun_get_skb_array(void *tap_priv);
 
 void my_vhost_net_clear_signaled(void *opaque, int vq_idx)
 {
@@ -1314,11 +1264,6 @@ err_vq:
 err:
 	mutex_unlock(&n->dev.mutex);
 	return r;
-}
-
-static long vhost_net_set_backend(struct vhost_net *n, unsigned index, int fd)
-{
-	return 0;
 }
 
 static long vhost_net_reset_owner(struct vhost_net *n)
