@@ -792,6 +792,7 @@ static int virtio_pci_vq_vector_unmask(VirtIODevice *vdev,
 			//there is irq pending, inject right now
 			void *priv = vhost_alloc_irq_entry_kvm(kvm->id, irqfd->virq);
 			vhost_inject_virq_kvm(kvm->id, priv);
+			kfree(priv);
         }
     }
 

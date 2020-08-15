@@ -1104,15 +1104,13 @@ long my_vhost_vring_ioctl(struct vhost_dev *d, int ioctl, void *argp)
 		break;
 	case VHOST_SET_VRING_CALL:
 		f = argp;
-		if (vq->signal_type != f->fd) {
-			vq->signal_type = f->fd;
-			if (f->fd == 2) {
-				vq->kvm_id = f->kvm_id;
-				vq->irq_priv = vhost_alloc_irq_entry_kvm(f->kvm_id, f->virq);
-			}
-		} else if (vq->signal_type == 2) {
-			vq->kvm_id = f->kvm_id;
-			kfree(vq->irq_priv);
+
+		vq->signal_type = f->fd;
+		vq->kvm_id = f->kvm_id;
+
+		if (f->fd == 2) {
+			if (vq->irq_priv)
+				kfree(vq->irq_priv);
 			vq->irq_priv = vhost_alloc_irq_entry_kvm(f->kvm_id, f->virq);
 		}
 
