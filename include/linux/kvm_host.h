@@ -453,6 +453,7 @@ struct virt_devices {
 	void *vbridge;
 	void *vblock;
 	void *vnet;
+	void *vI8042;
 };
 
 

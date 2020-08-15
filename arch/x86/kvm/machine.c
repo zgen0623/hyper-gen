@@ -657,6 +657,7 @@ static void create_vmem(struct kvm *kvm)
 	mem.flags = 0;
 
 #if 0
+	//code for clear guest memory
 	int i;
 	void *ptr = (void*)mem.userspace_addr;
 	for (i = 0; i < RAM_SIZE >> 12; i++) {
@@ -669,7 +670,94 @@ static void create_vmem(struct kvm *kvm)
 
 static void destroy_vmem(struct kvm *kvm)
 {
+	//done in kvm_free_memslot() function
+}
 
+struct vI8042 {
+	struct kvm_io_device dev;
+};
+
+static int vI8042_read(struct kvm_vcpu *vcpu, struct kvm_io_device *dev,
+			      gpa_t addr, int len, void *val)
+{
+	return 0;
+}
+
+#define KBD_CCMD_PULSE_BITS_3_0 0xF0    /* Pulse bits 3-0 of the output port P2. */
+#define KBD_CCMD_RESET          0xFE    /* Pulse bit 0 of the output port P2 = CPU reset. */
+#define KBD_CCMD_NO_OP          0xFF    /* Pulse no bits of the output port P2. */
+
+static int vI8042_write(struct kvm_vcpu *vcpu, struct kvm_io_device *dev,
+			       gpa_t addr, int len, const void *data)
+{
+	uint8_t val = *(uint8_t*)data;
+	int ret = 0;
+
+    if((val & KBD_CCMD_PULSE_BITS_3_0) == KBD_CCMD_PULSE_BITS_3_0) {
+        if(!(val & 1))
+            val = KBD_CCMD_RESET;
+        else
+            val = KBD_CCMD_NO_OP;
+    }
+    
+    switch(val) {
+    case KBD_CCMD_RESET:
+//        qemu_system_reset_request(SHUTDOWN_CAUSE_GUEST_RESET);
+       // qemu_system_shutdown_request(SHUTDOWN_CAUSE_GUEST_SHUTDOWN);
+		vcpu->run->exit_reason = KVM_EXIT_SHUTDOWN;
+		vcpu->mmio_needed = 0;
+		ret = 0xfafa;
+        break;
+    default:
+        printk(">>>%s:%d unsupported keyboard cmd=%x\n",
+			__func__, __LINE__, val);
+        break;
+    }
+
+	return ret;
+}
+
+static const struct kvm_io_device_ops vI8042_ops = {
+	.read     = vI8042_read,
+	.write    = vI8042_write,
+};
+
+static void create_vI8042(struct kvm *kvm)
+{
+	int ret;
+    struct vI8042 *i8042;
+
+	i8042 = kzalloc(sizeof(struct vI8042), GFP_KERNEL);
+	if (!i8042) {
+		printk(">>>>>error %s:%d\n", __func__, __LINE__);
+		return;
+	}
+
+	kvm_iodevice_init(&i8042->dev, &vI8042_ops);
+
+	mutex_lock(&kvm->slots_lock);
+	ret = kvm_io_bus_register_dev(kvm, KVM_PIO_BUS, 0x64, 1,
+				      &i8042->dev);
+	if (ret < 0) {
+		printk(">>>>>error %s:%d\n", __func__, __LINE__);
+		goto fail;
+	}
+
+	kvm->vdevices.vI8042 = i8042;
+fail:
+	mutex_unlock(&kvm->slots_lock);
+}
+
+
+static void destroy_vI8042(struct kvm *kvm)
+{
+    struct vI8042 *i8042 = kvm->vdevices.vI8042;
+
+	mutex_lock(&kvm->slots_lock);
+	kvm_io_bus_unregister_dev(kvm, KVM_PIO_BUS, &i8042->dev);
+	mutex_unlock(&kvm->slots_lock);
+
+	kfree(i8042);
 }
 
 int create_virt_machine(struct kvm *kvm)
@@ -735,6 +823,7 @@ int create_virt_machine(struct kvm *kvm)
 	build_bootparams_mini(kvm);
 
 	create_vpci(kvm);
+	create_vI8042(kvm);
 	create_vblk(kvm);
 	create_vnet(kvm);
 
@@ -751,6 +840,7 @@ void destroy_virt_machine(struct kvm *kvm)
 
 	destroy_vnet(kvm);
 	destroy_vblk(kvm);
+	destroy_vI8042(kvm);
 	destroy_vpci(kvm);
 
 	kfree(kvm->irq_routes);

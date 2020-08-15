@@ -3771,6 +3771,7 @@ static int __kvm_io_bus_write(struct kvm_vcpu *vcpu, struct kvm_io_bus *bus,
 			      struct kvm_io_range *range, const void *val)
 {
 	int idx;
+	int ret;
 
 	idx = kvm_io_bus_get_first_dev(bus, range->addr, range->len);
 	if (idx < 0)
@@ -3778,13 +3779,13 @@ static int __kvm_io_bus_write(struct kvm_vcpu *vcpu, struct kvm_io_bus *bus,
 
 	while (idx < bus->dev_count &&
 		kvm_io_bus_cmp(range, &bus->range[idx]) == 0) {
-		if (!kvm_iodevice_write(vcpu, bus->range[idx].dev, range->addr,
-					range->len, val))
+		if (!(ret = kvm_iodevice_write(vcpu, bus->range[idx].dev, range->addr,
+					range->len, val)))
 			return idx;
 		idx++;
 	}
 
-	return -EOPNOTSUPP;
+	return ret == 0xfafa ? ret : -EOPNOTSUPP;
 }
 
 /* kvm_io_bus_write - called under kvm->slots_lock */
@@ -3804,7 +3805,7 @@ int kvm_io_bus_write(struct kvm_vcpu *vcpu, enum kvm_bus bus_idx, gpa_t addr,
 	if (!bus)
 		return -ENOMEM;
 	r = __kvm_io_bus_write(vcpu, bus, &range, val);
-	return r < 0 ? r : 0;
+	return (r < 0 || r == 0xfafa) ? r : 0;
 }
 
 /* kvm_io_bus_write_cookie - called under kvm->slots_lock */
