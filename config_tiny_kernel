@@ -390,7 +390,7 @@ CONFIG_DEFAULT_CFQ=y
 CONFIG_DEFAULT_IOSCHED="cfq"
 # CONFIG_MQ_IOSCHED_DEADLINE is not set
 # CONFIG_MQ_IOSCHED_KYBER is not set
-# CONFIG_IOSCHED_BFQ is not set
+CONFIG_IOSCHED_BFQ=y
 CONFIG_PREEMPT_NOTIFIERS=y
 CONFIG_ASN1=y
 CONFIG_INLINE_SPIN_UNLOCK_IRQ=y
@@ -843,6 +843,7 @@ CONFIG_PCI_ENDPOINT_CONFIGFS=y
 CONFIG_ISA_BUS=y
 CONFIG_ISA_DMA_API=y
 CONFIG_AMD_NB=y
+# CONFIG_PCCARD is not set
 CONFIG_RAPIDIO=y
 # CONFIG_RAPIDIO_TSI721 is not set
 CONFIG_RAPIDIO_DISC_TIMEOUT=30
@@ -933,25 +934,45 @@ CONFIG_NETWORK_SECMARK=y
 CONFIG_NET_PTP_CLASSIFY=y
 CONFIG_NETWORK_PHY_TIMESTAMPING=y
 # CONFIG_NETFILTER is not set
-CONFIG_LLC=y
-# CONFIG_LLC2 is not set
+# CONFIG_IP_DCCP is not set
+# CONFIG_IP_SCTP is not set
+# CONFIG_RDS is not set
+# CONFIG_TIPC is not set
+# CONFIG_ATM is not set
+# CONFIG_L2TP is not set
 CONFIG_STP=y
 CONFIG_GARP=y
 CONFIG_MRP=y
 CONFIG_BRIDGE=y
 CONFIG_BRIDGE_IGMP_SNOOPING=y
 CONFIG_BRIDGE_VLAN_FILTERING=y
+CONFIG_HAVE_NET_DSA=y
+# CONFIG_NET_DSA is not set
 CONFIG_VLAN_8021Q=y
 CONFIG_VLAN_8021Q_GVRP=y
 CONFIG_VLAN_8021Q_MVRP=y
+# CONFIG_DECNET is not set
+CONFIG_LLC=y
+# CONFIG_LLC2 is not set
+# CONFIG_IPX is not set
+# CONFIG_ATALK is not set
+# CONFIG_X25 is not set
+# CONFIG_LAPB is not set
+# CONFIG_PHONET is not set
 # CONFIG_IEEE802154 is not set
 # CONFIG_NET_SCHED is not set
+# CONFIG_DCB is not set
 CONFIG_DNS_RESOLVER=y
+# CONFIG_BATMAN_ADV is not set
 # CONFIG_OPENVSWITCH is not set
+# CONFIG_VSOCKETS is not set
 # CONFIG_NETLINK_DIAG is not set
 # CONFIG_MPLS is not set
 # CONFIG_NET_NSH is not set
+# CONFIG_HSR is not set
 CONFIG_NET_SWITCHDEV=y
+# CONFIG_NET_L3_MASTER_DEV is not set
+# CONFIG_NET_NCSI is not set
 CONFIG_RPS=y
 CONFIG_RFS_ACCEL=y
 CONFIG_XPS=y
@@ -968,10 +989,22 @@ CONFIG_NET_FLOW_LIMIT=y
 # CONFIG_NET_PKTGEN is not set
 # CONFIG_NET_TCPPROBE is not set
 # CONFIG_NET_DROP_MONITOR is not set
+# CONFIG_HAMRADIO is not set
+# CONFIG_CAN is not set
+# CONFIG_BT is not set
 # CONFIG_AF_RXRPC is not set
+# CONFIG_AF_KCM is not set
 # CONFIG_STREAM_PARSER is not set
 CONFIG_FIB_RULES=y
+# CONFIG_WIRELESS is not set
+# CONFIG_WIMAX is not set
+# CONFIG_RFKILL is not set
+# CONFIG_NET_9P is not set
+# CONFIG_CAIF is not set
+# CONFIG_CEPH_LIB is not set
+# CONFIG_NFC is not set
 # CONFIG_PSAMPLE is not set
+# CONFIG_NET_IFE is not set
 CONFIG_LWTUNNEL=y
 # CONFIG_LWTUNNEL_BPF is not set
 # CONFIG_DST_CACHE is not set
@@ -1018,6 +1051,10 @@ CONFIG_DMA_SHARED_BUFFER=y
 #
 CONFIG_CONNECTOR=y
 # CONFIG_PROC_EVENTS is not set
+# CONFIG_MTD is not set
+# CONFIG_OF is not set
+CONFIG_ARCH_MIGHT_HAVE_PC_PARPORT=y
+# CONFIG_PARPORT is not set
 CONFIG_PNP=y
 # CONFIG_PNP_DEBUG_MESSAGES is not set
 
@@ -1078,7 +1115,6 @@ CONFIG_VIRTIO_BLK_SCSI=y
 #
 # Texas Instruments shared transport line discipline
 #
-# CONFIG_TI_ST is not set
 
 #
 # Altera FPGA firmware download module (requires I2C)
@@ -1151,15 +1187,15 @@ CONFIG_SCSI_DMA=y
 #
 # SCSI support type (disk, tape, CD-ROM)
 #
-# CONFIG_BLK_DEV_SD is not set
+CONFIG_BLK_DEV_SD=y
 # CONFIG_CHR_DEV_ST is not set
 # CONFIG_CHR_DEV_OSST is not set
 # CONFIG_BLK_DEV_SR is not set
-# CONFIG_CHR_DEV_SG is not set
+CONFIG_CHR_DEV_SG=y
 # CONFIG_CHR_DEV_SCH is not set
 # CONFIG_SCSI_CONSTANTS is not set
 # CONFIG_SCSI_LOGGING is not set
-# CONFIG_SCSI_SCAN_ASYNC is not set
+CONFIG_SCSI_SCAN_ASYNC=y
 
 #
 # SCSI Transports
@@ -1171,7 +1207,6 @@ CONFIG_SCSI_DMA=y
 # CONFIG_SCSI_SAS_LIBSAS is not set
 # CONFIG_SCSI_SRP_ATTRS is not set
 # CONFIG_SCSI_LOWLEVEL is not set
-# CONFIG_SCSI_LOWLEVEL_PCMCIA is not set
 # CONFIG_SCSI_DH is not set
 # CONFIG_SCSI_OSD_INITIATOR is not set
 CONFIG_ATA=y
@@ -1184,11 +1219,12 @@ CONFIG_SATA_PMP=y
 #
 # Controllers with non-SFF native interface
 #
-# CONFIG_SATA_AHCI is not set
-# CONFIG_SATA_AHCI_PLATFORM is not set
+CONFIG_SATA_AHCI=y
+CONFIG_SATA_MOBILE_LPM_POLICY=0
+CONFIG_SATA_AHCI_PLATFORM=y
 # CONFIG_SATA_INIC162X is not set
-# CONFIG_SATA_ACARD_AHCI is not set
-# CONFIG_SATA_SIL24 is not set
+CONFIG_SATA_ACARD_AHCI=y
+CONFIG_SATA_SIL24=y
 CONFIG_ATA_SFF=y
 
 #
@@ -1203,7 +1239,9 @@ CONFIG_ATA_BMDMA=y
 # SATA SFF controllers with BMDMA
 #
 CONFIG_ATA_PIIX=y
-# CONFIG_SATA_DWC is not set
+CONFIG_SATA_DWC=y
+CONFIG_SATA_DWC_OLD_DMA=y
+# CONFIG_SATA_DWC_DEBUG is not set
 # CONFIG_SATA_MV is not set
 # CONFIG_SATA_NV is not set
 # CONFIG_SATA_PROMISE is not set
@@ -1292,7 +1330,7 @@ CONFIG_BLK_DEV_DM=y
 # CONFIG_DM_ZERO is not set
 # CONFIG_DM_MULTIPATH is not set
 # CONFIG_DM_DELAY is not set
-# CONFIG_DM_UEVENT is not set
+CONFIG_DM_UEVENT=y
 # CONFIG_DM_FLAKEY is not set
 # CONFIG_DM_VERITY is not set
 # CONFIG_DM_SWITCH is not set
@@ -1312,6 +1350,7 @@ CONFIG_TCM_FILEIO=y
 #
 # CONFIG_FIREWIRE is not set
 # CONFIG_FIREWIRE_NOSY is not set
+# CONFIG_MACINTOSH_DRIVERS is not set
 CONFIG_NETDEVICES=y
 CONFIG_MII=y
 CONFIG_NET_CORE=y
@@ -1339,6 +1378,10 @@ CONFIG_VIRTIO_NET=y
 
 #
 # CAIF transport drivers
+#
+
+#
+# Distributed Switch Architecture drivers
 #
 CONFIG_ETHERNET=y
 # CONFIG_NET_VENDOR_3COM is not set
@@ -1424,17 +1467,21 @@ CONFIG_8139TOO=y
 # CONFIG_FDDI is not set
 # CONFIG_HIPPI is not set
 # CONFIG_NET_SB1000 is not set
-CONFIG_MDIO_DEVICE=y
-CONFIG_MDIO_BUS=y
-# CONFIG_MDIO_BITBANG is not set
-# CONFIG_MDIO_THUNDER is not set
+# CONFIG_MDIO_DEVICE is not set
+# CONFIG_MDIO_BUS is not set
 # CONFIG_PHYLIB is not set
 # CONFIG_PPP is not set
 # CONFIG_SLIP is not set
 # CONFIG_USB_NET_DRIVERS is not set
+# CONFIG_WLAN is not set
+
+#
+# Enable WiMAX (Networking options) to see the WiMAX drivers
+#
 # CONFIG_WAN is not set
 # CONFIG_VMXNET3 is not set
 # CONFIG_FUJITSU_ES is not set
+# CONFIG_ISDN is not set
 # CONFIG_NVM is not set
 
 #
@@ -1460,9 +1507,6 @@ CONFIG_INPUT=y
 CONFIG_INPUT_KEYBOARD=y
 CONFIG_KEYBOARD_ATKBD=y
 # CONFIG_KEYBOARD_LKKBD is not set
-# CONFIG_KEYBOARD_GPIO is not set
-# CONFIG_KEYBOARD_GPIO_POLLED is not set
-# CONFIG_KEYBOARD_MATRIX is not set
 # CONFIG_KEYBOARD_NEWTON is not set
 # CONFIG_KEYBOARD_OPENCORES is not set
 # CONFIG_KEYBOARD_SAMSUNG is not set
@@ -1490,7 +1534,6 @@ CONFIG_SERIO_LIBPS2=y
 # CONFIG_SERIO_ALTERA_PS2 is not set
 # CONFIG_SERIO_PS2MULT is not set
 # CONFIG_SERIO_ARC_PS2 is not set
-# CONFIG_SERIO_GPIO_PS2 is not set
 # CONFIG_USERIO is not set
 # CONFIG_GAMEPORT is not set
 
@@ -1564,10 +1607,6 @@ CONFIG_TTY_PRINTK=y
 # CONFIG_HW_RANDOM is not set
 # CONFIG_NVRAM is not set
 # CONFIG_APPLICOM is not set
-
-#
-# PCMCIA character devices
-#
 # CONFIG_MWAVE is not set
 # CONFIG_RAW_DRIVER is not set
 CONFIG_HPET=y
@@ -1590,6 +1629,32 @@ CONFIG_TCG_CRB=y
 # I2C support
 #
 # CONFIG_I2C is not set
+# CONFIG_SPI is not set
+# CONFIG_SPMI is not set
+# CONFIG_HSI is not set
+CONFIG_PPS=y
+# CONFIG_PPS_DEBUG is not set
+
+#
+# PPS clients support
+#
+# CONFIG_PPS_CLIENT_KTIMER is not set
+# CONFIG_PPS_CLIENT_LDISC is not set
+# CONFIG_PPS_CLIENT_GPIO is not set
+
+#
+# PPS generators support
+#
+
+#
+# PTP clock support
+#
+CONFIG_PTP_1588_CLOCK=y
+
+#
+# Enable PHYLIB and NETWORK_PHY_TIMESTAMPING to see the additional clocks.
+#
+CONFIG_PTP_1588_CLOCK_KVM=y
 CONFIG_PINCTRL=y
 # CONFIG_DEBUG_PINCTRL is not set
 # CONFIG_PINCTRL_AMD is not set
@@ -1602,52 +1667,7 @@ CONFIG_PINCTRL=y
 # CONFIG_PINCTRL_GEMINILAKE is not set
 # CONFIG_PINCTRL_LEWISBURG is not set
 # CONFIG_PINCTRL_SUNRISEPOINT is not set
-CONFIG_GPIOLIB=y
-CONFIG_GPIO_ACPI=y
-# CONFIG_DEBUG_GPIO is not set
-# CONFIG_GPIO_SYSFS is not set
-
-#
-# Memory mapped GPIO drivers
-#
-# CONFIG_GPIO_AMDPT is not set
-# CONFIG_GPIO_DWAPB is not set
-# CONFIG_GPIO_GENERIC_PLATFORM is not set
-# CONFIG_GPIO_ICH is not set
-# CONFIG_GPIO_LYNXPOINT is not set
-# CONFIG_GPIO_MB86S7X is not set
-# CONFIG_GPIO_MOCKUP is not set
-# CONFIG_GPIO_VX855 is not set
-
-#
-# Port-mapped I/O GPIO drivers
-#
-# CONFIG_GPIO_104_DIO_48E is not set
-# CONFIG_GPIO_104_IDIO_16 is not set
-# CONFIG_GPIO_104_IDI_48 is not set
-# CONFIG_GPIO_F7188X is not set
-# CONFIG_GPIO_GPIO_MM is not set
-# CONFIG_GPIO_IT87 is not set
-# CONFIG_GPIO_SCH is not set
-# CONFIG_GPIO_SCH311X is not set
-# CONFIG_GPIO_WS16C48 is not set
-
-#
-# MFD GPIO expanders
-#
-
-#
-# PCI GPIO expanders
-#
-# CONFIG_GPIO_AMD8111 is not set
-# CONFIG_GPIO_BT8XX is not set
-# CONFIG_GPIO_ML_IOH is not set
-# CONFIG_GPIO_PCI_IDIO_16 is not set
-# CONFIG_GPIO_RDC321X is not set
-
-#
-# USB GPIO expanders
-#
+# CONFIG_GPIOLIB is not set
 # CONFIG_W1 is not set
 CONFIG_POWER_AVS=y
 # CONFIG_QCOM_CPR is not set
@@ -1661,8 +1681,6 @@ CONFIG_POWER_SUPPLY=y
 # CONFIG_BATTERY_DS2781 is not set
 # CONFIG_BATTERY_BQ27XXX is not set
 # CONFIG_CHARGER_MAX8903 is not set
-# CONFIG_CHARGER_GPIO is not set
-# CONFIG_CHARGER_LTC3651 is not set
 CONFIG_HWMON=y
 # CONFIG_HWMON_VID is not set
 # CONFIG_HWMON_DEBUG_CHIP is not set
@@ -1690,7 +1708,6 @@ CONFIG_HWMON=y
 # CONFIG_SENSORS_NTC_THERMISTOR is not set
 # CONFIG_SENSORS_NCT6683 is not set
 # CONFIG_SENSORS_NCT6775 is not set
-# CONFIG_SENSORS_SHT15 is not set
 # CONFIG_SENSORS_SIS5595 is not set
 # CONFIG_SENSORS_SMSC47M1 is not set
 # CONFIG_SENSORS_SMSC47B397 is not set
@@ -1785,7 +1802,6 @@ CONFIG_WATCHDOG_SYSFS=y
 # CONFIG_SBC_EPX_C3_WATCHDOG is not set
 # CONFIG_NI903X_WDT is not set
 # CONFIG_NIC7018_WDT is not set
-# CONFIG_MEN_A21_WDT is not set
 
 #
 # PCI-based Watchdog Cards
@@ -1806,6 +1822,14 @@ CONFIG_WATCHDOG_PRETIMEOUT_DEFAULT_GOV_NOOP=y
 # CONFIG_WATCHDOG_PRETIMEOUT_DEFAULT_GOV_PANIC is not set
 CONFIG_WATCHDOG_PRETIMEOUT_GOV_NOOP=y
 # CONFIG_WATCHDOG_PRETIMEOUT_GOV_PANIC is not set
+CONFIG_SSB_POSSIBLE=y
+
+#
+# Sonics Silicon Backplane
+#
+# CONFIG_SSB is not set
+CONFIG_BCMA_POSSIBLE=y
+# CONFIG_BCMA is not set
 
 #
 # Multifunction device drivers
@@ -1832,43 +1856,7 @@ CONFIG_MFD_SYSCON=y
 # CONFIG_MFD_VX855 is not set
 # CONFIG_REGULATOR is not set
 # CONFIG_RC_CORE is not set
-CONFIG_MEDIA_SUPPORT=y
-
-#
-# Multimedia core support
-#
-# CONFIG_MEDIA_CAMERA_SUPPORT is not set
-# CONFIG_MEDIA_ANALOG_TV_SUPPORT is not set
-# CONFIG_MEDIA_DIGITAL_TV_SUPPORT is not set
-# CONFIG_MEDIA_RADIO_SUPPORT is not set
-# CONFIG_MEDIA_SDR_SUPPORT is not set
-CONFIG_MEDIA_CEC_SUPPORT=y
-# CONFIG_VIDEO_ADV_DEBUG is not set
-# CONFIG_VIDEO_FIXED_MINOR_RANGES is not set
-
-#
-# Media drivers
-#
-# CONFIG_MEDIA_USB_SUPPORT is not set
-CONFIG_MEDIA_PCI_SUPPORT=y
-# CONFIG_CEC_PLATFORM_DRIVERS is not set
-
-#
-# Supported MMC/SDIO adapters
-#
-# CONFIG_CYPRESS_FIRMWARE is not set
-
-#
-# Media ancillary drivers (tuners, sensors, i2c, spi, frontends)
-#
-
-#
-# Customise DVB Frontends
-#
-
-#
-# Tools to develop new frontends
-#
+# CONFIG_MEDIA_SUPPORT is not set
 
 #
 # Graphics support
@@ -1975,6 +1963,98 @@ CONFIG_FRAMEBUFFER_CONSOLE=y
 CONFIG_FRAMEBUFFER_CONSOLE_DETECT_PRIMARY=y
 CONFIG_FRAMEBUFFER_CONSOLE_ROTATION=y
 # CONFIG_LOGO is not set
+# CONFIG_SOUND is not set
+
+#
+# HID support
+#
+CONFIG_HID=y
+# CONFIG_HID_BATTERY_STRENGTH is not set
+# CONFIG_HIDRAW is not set
+# CONFIG_UHID is not set
+CONFIG_HID_GENERIC=y
+
+#
+# Special HID drivers
+#
+# CONFIG_HID_A4TECH is not set
+# CONFIG_HID_ACCUTOUCH is not set
+# CONFIG_HID_ACRUX is not set
+# CONFIG_HID_APPLE is not set
+# CONFIG_HID_APPLEIR is not set
+# CONFIG_HID_AUREAL is not set
+# CONFIG_HID_BELKIN is not set
+# CONFIG_HID_BETOP_FF is not set
+# CONFIG_HID_CHERRY is not set
+# CONFIG_HID_CHICONY is not set
+# CONFIG_HID_CMEDIA is not set
+# CONFIG_HID_CYPRESS is not set
+# CONFIG_HID_DRAGONRISE is not set
+# CONFIG_HID_EMS_FF is not set
+# CONFIG_HID_ELECOM is not set
+# CONFIG_HID_ELO is not set
+# CONFIG_HID_EZKEY is not set
+# CONFIG_HID_GEMBIRD is not set
+# CONFIG_HID_GFRM is not set
+# CONFIG_HID_HOLTEK is not set
+# CONFIG_HID_KEYTOUCH is not set
+# CONFIG_HID_KYE is not set
+# CONFIG_HID_UCLOGIC is not set
+# CONFIG_HID_WALTOP is not set
+# CONFIG_HID_GYRATION is not set
+# CONFIG_HID_ICADE is not set
+# CONFIG_HID_ITE is not set
+# CONFIG_HID_TWINHAN is not set
+# CONFIG_HID_KENSINGTON is not set
+# CONFIG_HID_LCPOWER is not set
+# CONFIG_HID_LENOVO is not set
+# CONFIG_HID_LOGITECH is not set
+# CONFIG_HID_MAGICMOUSE is not set
+# CONFIG_HID_MAYFLASH is not set
+# CONFIG_HID_MICROSOFT is not set
+# CONFIG_HID_MONTEREY is not set
+# CONFIG_HID_MULTITOUCH is not set
+# CONFIG_HID_NTI is not set
+# CONFIG_HID_NTRIG is not set
+# CONFIG_HID_ORTEK is not set
+# CONFIG_HID_PANTHERLORD is not set
+# CONFIG_HID_PENMOUNT is not set
+# CONFIG_HID_PETALYNX is not set
+# CONFIG_HID_PICOLCD is not set
+# CONFIG_HID_PLANTRONICS is not set
+# CONFIG_HID_PRIMAX is not set
+# CONFIG_HID_RETRODE is not set
+# CONFIG_HID_ROCCAT is not set
+# CONFIG_HID_SAITEK is not set
+# CONFIG_HID_SAMSUNG is not set
+# CONFIG_HID_SPEEDLINK is not set
+# CONFIG_HID_STEELSERIES is not set
+# CONFIG_HID_SUNPLUS is not set
+# CONFIG_HID_RMI is not set
+# CONFIG_HID_GREENASIA is not set
+# CONFIG_HID_SMARTJOYPLUS is not set
+# CONFIG_HID_TIVO is not set
+# CONFIG_HID_TOPSEED is not set
+# CONFIG_HID_THRUSTMASTER is not set
+# CONFIG_HID_UDRAW_PS3 is not set
+# CONFIG_HID_WACOM is not set
+# CONFIG_HID_XINMO is not set
+# CONFIG_HID_ZEROPLUS is not set
+# CONFIG_HID_ZYDACRON is not set
+# CONFIG_HID_SENSOR_HUB is not set
+# CONFIG_HID_ALPS is not set
+
+#
+# USB HID support
+#
+CONFIG_USB_HID=y
+CONFIG_HID_PID=y
+CONFIG_USB_HIDDEV=y
+
+#
+# Intel ISH HID support
+#
+# CONFIG_INTEL_ISH_HID is not set
 CONFIG_USB_OHCI_LITTLE_ENDIAN=y
 CONFIG_USB_SUPPORT=y
 CONFIG_USB_COMMON=y
@@ -2083,12 +2163,15 @@ CONFIG_USB_UHCI_HCD=y
 #
 # CONFIG_USB_PHY is not set
 # CONFIG_NOP_USB_XCEIV is not set
-# CONFIG_USB_GPIO_VBUS is not set
 # CONFIG_USB_GADGET is not set
 # CONFIG_TYPEC is not set
 # CONFIG_USB_ULPI_BUS is not set
+# CONFIG_UWB is not set
+# CONFIG_MMC is not set
+# CONFIG_MEMSTICK is not set
 # CONFIG_NEW_LEDS is not set
 # CONFIG_ACCESSIBILITY is not set
+# CONFIG_INFINIBAND is not set
 CONFIG_EDAC_ATOMIC_SCRUB=y
 CONFIG_EDAC_SUPPORT=y
 CONFIG_EDAC=y
@@ -2168,6 +2251,7 @@ CONFIG_RTC_DRV_CMOS=y
 #
 # HID Sensor RTC drivers
 #
+# CONFIG_RTC_DRV_HID_SENSOR_TIME is not set
 CONFIG_DMADEVICES=y
 # CONFIG_DMADEVICES_DEBUG is not set
 
@@ -2196,12 +2280,11 @@ CONFIG_ASYNC_TX_DMA=y
 #
 CONFIG_SYNC_FILE=y
 CONFIG_SW_SYNC=y
-CONFIG_AUXDISPLAY=y
-# CONFIG_HD44780 is not set
-# CONFIG_IMG_ASCII_LCD is not set
+# CONFIG_AUXDISPLAY is not set
 # CONFIG_UIO is not set
 # CONFIG_VFIO is not set
 CONFIG_IRQ_BYPASS_MANAGER=y
+# CONFIG_VIRT_DRIVERS is not set
 CONFIG_VIRTIO=y
 
 #
@@ -2213,34 +2296,13 @@ CONFIG_VIRTIO_BALLOON=y
 # CONFIG_VIRTIO_INPUT is not set
 CONFIG_VIRTIO_MMIO=y
 CONFIG_VIRTIO_MMIO_CMDLINE_DEVICES=y
-CONFIG_STAGING=y
-# CONFIG_IRDA is not set
-# CONFIG_COMEDI is not set
-# CONFIG_RTS5208 is not set
-# CONFIG_FB_SM750 is not set
-# CONFIG_FB_XGI is not set
 
 #
-# Speakup console speech
+# Microsoft Hyper-V guest support
 #
-# CONFIG_SPEAKUP is not set
-# CONFIG_STAGING_MEDIA is not set
-
-#
-# Android
-#
-# CONFIG_LTE_GDM724X is not set
-# CONFIG_LNET is not set
-# CONFIG_DGNC is not set
-# CONFIG_GS_FPGABOOT is not set
-# CONFIG_CRYPTO_SKEIN is not set
-# CONFIG_UNISYSSPAR is not set
-# CONFIG_MOST is not set
-# CONFIG_GREYBUS is not set
-
-#
-# USB Power Delivery and Type-C drivers
-#
+# CONFIG_HYPERV is not set
+# CONFIG_HYPERV_TSCPAGE is not set
+# CONFIG_STAGING is not set
 CONFIG_X86_PLATFORM_DEVICES=y
 # CONFIG_ACERHDF is not set
 # CONFIG_DELL_SMBIOS is not set
@@ -2254,8 +2316,9 @@ CONFIG_X86_PLATFORM_DEVICES=y
 # CONFIG_ASUS_WIRELESS is not set
 # CONFIG_ACPI_WMI is not set
 # CONFIG_TOPSTAR_LAPTOP is not set
+# CONFIG_TOSHIBA_BT_RFKILL is not set
 # CONFIG_TOSHIBA_HAPS is not set
-# CONFIG_INTEL_INT0002_VGPIO is not set
+# CONFIG_ACPI_CMPC is not set
 # CONFIG_INTEL_HID_EVENT is not set
 # CONFIG_INTEL_VBTN is not set
 # CONFIG_INTEL_IPS is not set
@@ -2272,8 +2335,7 @@ CONFIG_INTEL_PMC_CORE=y
 CONFIG_INTEL_TURBO_MAX_3=y
 # CONFIG_INTEL_ATOMISP2_PM is not set
 CONFIG_PMC_ATOM=y
-CONFIG_CHROME_PLATFORMS=y
-# CONFIG_CHROMEOS_PSTORE is not set
+# CONFIG_CHROME_PLATFORMS is not set
 CONFIG_CLKDEV_LOOKUP=y
 CONFIG_HAVE_CLK_PREPARE=y
 CONFIG_COMMON_CLK=y
@@ -2315,6 +2377,39 @@ CONFIG_INTEL_IOMMU_SVM=y
 # CONFIG_INTEL_IOMMU_DEFAULT_ON is not set
 CONFIG_INTEL_IOMMU_FLOPPY_WA=y
 CONFIG_IRQ_REMAP=y
+
+#
+# Remoteproc drivers
+#
+# CONFIG_REMOTEPROC is not set
+
+#
+# Rpmsg drivers
+#
+# CONFIG_RPMSG_QCOM_GLINK_RPM is not set
+# CONFIG_RPMSG_VIRTIO is not set
+
+#
+# SOC (System On Chip) specific Drivers
+#
+
+#
+# Amlogic SoC drivers
+#
+
+#
+# Broadcom SoC drivers
+#
+
+#
+# i.MX SoC drivers
+#
+
+#
+# Qualcomm SoC drivers
+#
+# CONFIG_SUNXI_SRAM is not set
+# CONFIG_SOC_TI is not set
 CONFIG_PM_DEVFREQ=y
 
 #
@@ -2330,16 +2425,21 @@ CONFIG_DEVFREQ_GOV_PASSIVE=y
 # DEVFREQ Drivers
 #
 CONFIG_PM_DEVFREQ_EVENT=y
+# CONFIG_EXTCON is not set
 CONFIG_MEMORY=y
+# CONFIG_IIO is not set
 # CONFIG_NTB is not set
 # CONFIG_VME_BUS is not set
+# CONFIG_PWM is not set
 
 #
 # IRQ chip support
 #
 CONFIG_ARM_GIC_MAX_NR=1
 # CONFIG_ARM_GIC_V3_ITS is not set
+# CONFIG_IPACK_BUS is not set
 # CONFIG_RESET_CONTROLLER is not set
+# CONFIG_FMC is not set
 
 #
 # PHY Subsystem
@@ -2349,12 +2449,19 @@ CONFIG_GENERIC_PHY=y
 # CONFIG_PHY_PXA_28NM_HSIC is not set
 # CONFIG_PHY_PXA_28NM_USB2 is not set
 # CONFIG_POWERCAP is not set
+# CONFIG_MCB is not set
 
 #
 # Performance monitor support
 #
 CONFIG_RAS=y
 CONFIG_RAS_CEC=y
+# CONFIG_THUNDERBOLT is not set
+
+#
+# Android
+#
+# CONFIG_ANDROID is not set
 CONFIG_LIBNVDIMM=y
 # CONFIG_BLK_DEV_PMEM is not set
 # CONFIG_ND_BLK is not set
@@ -2365,12 +2472,13 @@ CONFIG_DAX=y
 CONFIG_NVMEM=y
 # CONFIG_STM is not set
 # CONFIG_INTEL_TH is not set
-CONFIG_PM_OPP=y
+# CONFIG_FPGA is not set
 
 #
-# Ubuntu Supplied Third-Party Device Drivers
+# FSI support
 #
-# CONFIG_HIO is not set
+# CONFIG_FSI is not set
+CONFIG_PM_OPP=y
 
 #
 # Firmware Drivers
@@ -2548,6 +2656,7 @@ CONFIG_SUNRPC=y
 CONFIG_SUNRPC_GSS=y
 CONFIG_SUNRPC_BACKCHANNEL=y
 # CONFIG_SUNRPC_DEBUG is not set
+# CONFIG_CEPH_FS is not set
 # CONFIG_CIFS is not set
 # CONFIG_NCP_FS is not set
 # CONFIG_CODA_FS is not set
@@ -2790,7 +2899,6 @@ CONFIG_HIST_TRIGGERS=y
 # CONFIG_RING_BUFFER_BENCHMARK is not set
 # CONFIG_RING_BUFFER_STARTUP_TEST is not set
 # CONFIG_TRACE_EVAL_MAP_FILE is not set
-CONFIG_TRACING_EVENTS_GPIO=y
 # CONFIG_PROVIDE_OHCI1394_DMA_INIT is not set
 # CONFIG_DMA_API_DEBUG is not set
 
