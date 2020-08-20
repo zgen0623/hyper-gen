@@ -3496,13 +3496,65 @@ static long kvm_vm_compat_ioctl(struct file *filp,
 }
 #endif
 
+void *get_vserial_tx_buf(struct vserial *vser);
+void *get_vserial_rx_buf(struct vserial *vser);
+
+static int kvm_vm_fault(struct vm_fault *vmf)
+{
+	struct kvm *vm = vmf->vma->vm_file->private_data;
+	struct page *page;
+
+	if (vmf->pgoff == 0)
+		page = virt_to_page(vm->gen_shm);
+	else if (vmf->pgoff == vm->gen_shm->vser_info.tx_buf_offset)
+		page = virt_to_page(get_vserial_tx_buf(vm->vdevices.vserial));
+	else if (vmf->pgoff == vm->gen_shm->vser_info.rx_buf_offset)
+		page = virt_to_page(get_vserial_rx_buf(vm->vdevices.vserial));
+	else if (vmf->pgoff == vm->gen_shm->gen_evt.evt_buf_offset)
+		page = virt_to_page(vm->gen_evt_buf);
+	else
+		return VM_FAULT_SIGBUS;
+
+	get_page(page);
+	vmf->page = page;
+	return 0;
+}
+
+static const struct vm_operations_struct kvm_vm_vm_ops = {
+	.fault = kvm_vm_fault,
+};
+
+static int kvm_vm_mmap(struct file *file, struct vm_area_struct *vma)
+{
+	vma->vm_ops = &kvm_vm_vm_ops;
+	return 0;
+}
+
+static unsigned int kvm_vm_poll(struct file *file, poll_table *wait)
+{
+	struct kvm *vm = file->private_data;
+	struct gen_event *gen_evt = &vm->gen_shm->gen_evt;
+	unsigned int mask = 0;
+
+	poll_wait(file, &vm->gen_evt_wait_head, wait);
+
+	printk(">>>>%s:%d\n", __func__, __LINE__);
+
+	if (gen_evt->evt_put_idx != gen_evt->evt_get_idx)
+		mask = POLLIN | POLLRDNORM;
+
+	return mask;
+}
+
 static struct file_operations kvm_vm_fops = {
 	.release        = kvm_vm_release,
 	.unlocked_ioctl = kvm_vm_ioctl,
 #ifdef CONFIG_KVM_COMPAT
 	.compat_ioctl   = kvm_vm_compat_ioctl,
 #endif
+	.mmap           = kvm_vm_mmap,
 	.llseek		= noop_llseek,
+	.poll	= kvm_vm_poll,
 };
 
 static int kvm_dev_ioctl_create_vm(unsigned long type)
@@ -3561,6 +3613,15 @@ static long kvm_dev_ioctl(struct file *filp,
 	case KVM_TRACE_PAUSE:
 	case KVM_TRACE_DISABLE:
 		r = -EOPNOTSUPP;
+		break;
+
+	case KVM_GET_GEN_REG_MMAP_SIZE:
+		if (arg)
+			goto out;
+
+		r = PAGE_SIZE;  /* struct gen_shm */
+		r += PAGE_SIZE;  /* for serial rx buf */
+		r += PAGE_SIZE;  /* for serial tx buf */
 		break;
 	default:
 		return kvm_arch_dev_ioctl(filp, ioctl, arg);

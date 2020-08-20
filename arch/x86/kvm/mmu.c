@@ -2014,7 +2014,7 @@ static void kvm_mmu_free_page(struct kvm_mmu_page *sp)
 	list_del(&sp->link);
 	free_page((unsigned long)sp->spt);
 	if (!sp->role.direct) {
-		printk("", __func__, __LINE__);
+		printk(">>%s:%d\n", __func__, __LINE__);
 		free_page((unsigned long)sp->gfns);
 	}
 	kmem_cache_free(mmu_page_header_cache, sp);

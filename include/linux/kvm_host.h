@@ -454,6 +454,28 @@ struct virt_devices {
 	void *vblock;
 	void *vnet;
 	void *vI8042;
+	void *vserial;
+};
+
+struct vserial_info {
+	uint32_t tx_buf_offset;
+	uint32_t tx_put_idx;
+	uint32_t tx_get_idx;
+
+	uint32_t rx_buf_offset;
+	uint32_t rx_put_idx;
+	uint32_t rx_get_idx;
+};
+
+struct gen_event {
+	uint32_t evt_buf_offset;
+	uint32_t evt_put_idx;
+	uint32_t evt_get_idx;
+};
+
+struct gen_shm {
+	struct gen_event gen_evt;
+	struct vserial_info vser_info;
 };
 
 
@@ -527,6 +549,10 @@ struct kvm {
 	long unsigned *used_gsi_bitmap;
 	int ent_allocated;
 	struct list_head evt_list;
+
+	struct gen_shm *gen_shm;
+	void *gen_evt_buf;
+	wait_queue_head_t	gen_evt_wait_head;
 };
 
 #define kvm_err(fmt, ...) \
