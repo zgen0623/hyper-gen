@@ -3538,7 +3538,7 @@ static unsigned int kvm_vm_poll(struct file *file, poll_table *wait)
 
 	poll_wait(file, &vm->gen_evt_wait_head, wait);
 
-	printk(">>>>%s:%d\n", __func__, __LINE__);
+	//printk(">>>>%s:%d\n", __func__, __LINE__);
 
 	if (gen_evt->evt_put_idx != gen_evt->evt_get_idx)
 		mask = POLLIN | POLLRDNORM;

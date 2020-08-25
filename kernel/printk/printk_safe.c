@@ -370,6 +370,9 @@ void __printk_safe_exit(void)
 	this_cpu_dec(printk_context);
 }
 
+extern int my_start;
+extern uint64_t my_mark;
+
 __printf(1, 0) int vprintk_func(const char *fmt, va_list args)
 {
 	/*
@@ -380,19 +383,31 @@ __printf(1, 0) int vprintk_func(const char *fmt, va_list args)
 	    raw_spin_trylock(&logbuf_lock)) {
 		int len;
 
+		if (my_start)
+			my_mark |= 1UL<<0;
+
 		len = vprintk_store(0, LOGLEVEL_DEFAULT, NULL, 0, fmt, args);
 		raw_spin_unlock(&logbuf_lock);
 		defer_console_output();
 		return len;
 	}
 
+	if (my_start)
+		my_mark |= 1UL<<1;
+
 	/* Use extra buffer in NMI when logbuf_lock is taken or in safe mode. */
 	if (this_cpu_read(printk_context) & PRINTK_NMI_CONTEXT_MASK)
 		return vprintk_nmi(fmt, args);
 
+	if (my_start)
+		my_mark |= 1UL<<2;
+
 	/* Use extra buffer to prevent a recursion deadlock in safe mode. */
 	if (this_cpu_read(printk_context) & PRINTK_SAFE_CONTEXT_MASK)
 		return vprintk_safe(fmt, args);
+
+	if (my_start)
+		my_mark |= 1UL<<3;
 
 	/* No obstacles. */
 	return vprintk_default(fmt, args);

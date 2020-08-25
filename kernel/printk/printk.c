@@ -59,6 +59,10 @@
 #include "braille.h"
 #include "internal.h"
 
+extern int my_start;
+extern uint64_t my_mark;
+
+
 int console_printk[4] = {
 	CONSOLE_LOGLEVEL_DEFAULT,	/* console_loglevel */
 	MESSAGE_LOGLEVEL_DEFAULT,	/* default_message_loglevel */
@@ -1489,11 +1493,13 @@ int do_syslog(int type, char __user *buf, int len, int source)
 		if (saved_console_loglevel == LOGLEVEL_DEFAULT)
 			saved_console_loglevel = console_loglevel;
 		console_loglevel = minimum_console_loglevel;
+		printk(">>>%s:%d lev=%d\n", __func__, __LINE__, console_loglevel);
 		break;
 	/* Enable logging to console */
 	case SYSLOG_ACTION_CONSOLE_ON:
 		if (saved_console_loglevel != LOGLEVEL_DEFAULT) {
 			console_loglevel = saved_console_loglevel;
+			printk(">>>%s:%d lev=%d\n", __func__, __LINE__, console_loglevel);
 			saved_console_loglevel = LOGLEVEL_DEFAULT;
 		}
 		break;
@@ -1504,6 +1510,7 @@ int do_syslog(int type, char __user *buf, int len, int source)
 		if (len < minimum_console_loglevel)
 			len = minimum_console_loglevel;
 		console_loglevel = len;
+		printk(">>>%s:%d lev=%d\n", __func__, __LINE__, console_loglevel);
 		/* Implicitly re-enable logging to console */
 		saved_console_loglevel = LOGLEVEL_DEFAULT;
 		break;
@@ -1704,6 +1711,7 @@ static void call_console_drivers(const char *ext_text, size_t ext_len,
 				 const char *text, size_t len)
 {
 	struct console *con;
+	static int my_cnt = 0;
 
 	trace_console_rcuidle(text, len);
 
@@ -1720,6 +1728,14 @@ static void call_console_drivers(const char *ext_text, size_t ext_len,
 		if (!cpu_online(smp_processor_id()) &&
 		    !(con->flags & CON_ANYTIME))
 			continue;
+
+#if 0
+		if (my_cnt++ == 100) {
+			dump_stack();
+		//	printk(">>>>>%s:%d\n", __func__, __LINE__);
+		}
+#endif
+
 		if (con->flags & CON_EXTENDED)
 			con->write(con, ext_text, ext_len);
 		else
@@ -1905,13 +1921,18 @@ asmlinkage int vprintk_emit(int facility, int level,
 
 	/* This stops the holder of console_sem just where we want him */
 	logbuf_lock_irqsave(flags);
+
 	curr_log_seq = log_next_seq;
 	printed_len = vprintk_store(facility, level, dict, dictlen, fmt, args);
 	pending_output = (curr_log_seq != log_next_seq);
+
 	logbuf_unlock_irqrestore(flags);
 
 	/* If called from the scheduler, we can not call up(). */
 	if (!in_sched && pending_output) {
+
+		if (my_start)
+			my_mark |= 1UL<<4;
 		/*
 		 * Disable preemption to avoid being preempted while holding
 		 * console_sem which would prevent anyone from printing to
@@ -1923,13 +1944,22 @@ asmlinkage int vprintk_emit(int facility, int level,
 		 * semaphore.  The release will print out buffers and wake up
 		 * /dev/kmsg and syslog() users.
 		 */
-		if (console_trylock_spinning())
+		if (console_trylock_spinning()) {
+			if (my_start)
+				my_mark |= 1UL<<5;
+
 			console_unlock();
+		}
 		preempt_enable();
 	}
 
-	if (pending_output)
+	if (pending_output) {
+		if (my_start)
+			my_mark |= 1UL<<6;
 		wake_up_klogd();
+	}
+
+
 	return printed_len;
 }
 EXPORT_SYMBOL(vprintk_emit);
@@ -2078,15 +2108,18 @@ static int __add_preferred_console(char *name, int idx, char *options,
 			return 0;
 		}
 	}
+
 	if (i == MAX_CMDLINECONSOLES)
 		return -E2BIG;
+
 	if (!brl_options)
-		preferred_console = i;
-	strlcpy(c->name, name, sizeof(c->name));
+		preferred_console = i; //0
+
+	strlcpy(c->name, name, sizeof(c->name)); //ttyS
 	c->options = options;
 	braille_set_options(c, brl_options);
 
-	c->index = idx;
+	c->index = idx; //0
 	return 0;
 }
 /*
@@ -2111,19 +2144,16 @@ static int __init console_setup(char *str)
 	} else {
 		strncpy(buf, str, sizeof(buf) - 1);
 	}
+
 	buf[sizeof(buf) - 1] = 0;
 	options = strchr(str, ',');
 	if (options)
 		*(options++) = 0;
-#ifdef __sparc__
-	if (!strcmp(str, "ttya"))
-		strcpy(buf, "ttyS0");
-	if (!strcmp(str, "ttyb"))
-		strcpy(buf, "ttyS1");
-#endif
+
 	for (s = buf; *s; s++)
 		if (isdigit(*s) || *s == ',')
 			break;
+
 	idx = simple_strtoul(s, NULL, 10);
 	*s = 0;
 
@@ -2307,6 +2337,8 @@ void console_unlock(void)
 	bool do_cond_resched, retry;
 
 	if (console_suspended) {
+		if (my_start)
+			my_mark |= 1UL<<7;
 		up_console_sem();
 		return;
 	}
@@ -2335,6 +2367,8 @@ again:
 	 * console.
 	 */
 	if (!can_use_console()) {
+		if (my_start)
+			my_mark |= 1UL<<8;
 		console_locked = 0;
 		up_console_sem();
 		return;
@@ -2347,6 +2381,7 @@ again:
 
 		printk_safe_enter_irqsave(flags);
 		raw_spin_lock(&logbuf_lock);
+
 		if (seen_seq != log_next_seq) {
 			wake_klogd = true;
 			seen_seq = log_next_seq;
@@ -2363,12 +2398,24 @@ again:
 		} else {
 			len = 0;
 		}
+
+		if (my_start)
+			my_mark |= 1UL<<9;
 skip:
 		if (console_seq == log_next_seq)
 			break;
 
+		if (my_start)
+			my_mark |= 1UL<<10;
+
 		msg = log_from_idx(console_idx);
+		if (my_start) {
+//			printk(">>>>%s:%d m_lev=%d c_lev=%d\n", __func__, __LINE__, msg->level, console_loglevel);
+		}
+
 		if (suppress_message_printing(msg->level)) {
+			if (my_start)
+				my_mark |= 1UL<<11;
 			/*
 			 * Skip record we have buffered and already printed
 			 * directly to the console when we received it, and
@@ -2378,6 +2425,9 @@ skip:
 			console_seq++;
 			goto skip;
 		}
+
+		if (my_start)
+			my_mark |= 1UL<<12;
 
 		/* Output to all consoles once old messages replayed. */
 		if (unlikely(exclusive_console &&
@@ -2439,12 +2489,19 @@ skip:
 	raw_spin_unlock(&logbuf_lock);
 	printk_safe_exit_irqrestore(flags);
 
-	if (retry && console_trylock())
+
+	if (retry && console_trylock()) {
+		if (my_start)
+			my_mark |= 1UL<<13;
 		goto again;
+	}
 
 out:
-	if (wake_klogd)
+	if (wake_klogd) {
+		if (my_start)
+			my_mark |= 1UL<<14;
 		wake_up_klogd();
+	}
 }
 EXPORT_SYMBOL(console_unlock);
 
@@ -2585,6 +2642,9 @@ void register_console(struct console *newcon)
 	struct console_cmdline *c;
 	static bool has_preferred;
 
+	dump_stack();
+	printk(">>>%s:%d con=%s read=%lx\n", __func__, __LINE__, newcon->name, newcon->read);
+
 	if (console_drivers)
 		for_each_console(bcon)
 			if (WARN(bcon == newcon,
@@ -2592,6 +2652,7 @@ void register_console(struct console *newcon)
 					bcon->name, bcon->index))
 				return;
 
+	printk(">>>%s:%d new_con=%s c_drvs=%lx\n", __func__, __LINE__, newcon->name, console_drivers);
 	/*
 	 * before we register a new CON_BOOT console, make sure we don't
 	 * already have a valid console
@@ -2606,12 +2667,13 @@ void register_console(struct console *newcon)
 			}
 		}
 	}
+	printk(">>>%s:%d con=%s\n", __func__, __LINE__, newcon->name);
 
 	if (console_drivers && console_drivers->flags & CON_BOOT)
 		bcon = console_drivers;
 
 	if (!has_preferred || bcon || !console_drivers)
-		has_preferred = preferred_console >= 0;
+		has_preferred = preferred_console >= 0; //true
 
 	/*
 	 *	See if we want to use this console driver. If we
@@ -2621,10 +2683,13 @@ void register_console(struct console *newcon)
 	if (!has_preferred) {
 		if (newcon->index < 0)
 			newcon->index = 0;
+
 		if (newcon->setup == NULL ||
 		    newcon->setup(newcon, NULL) == 0) {
+	printk(">>>%s:%d con=%s\n", __func__, __LINE__, newcon->name);
 			newcon->flags |= CON_ENABLED;
 			if (newcon->device) {
+	printk(">>>%s:%d con=%s\n", __func__, __LINE__, newcon->name);
 				newcon->flags |= CON_CONSDEV;
 				has_preferred = true;
 			}
@@ -2644,9 +2709,11 @@ void register_console(struct console *newcon)
 			BUILD_BUG_ON(sizeof(c->name) != sizeof(newcon->name));
 			if (strcmp(c->name, newcon->name) != 0)
 				continue;
+
 			if (newcon->index >= 0 &&
 			    newcon->index != c->index)
 				continue;
+
 			if (newcon->index < 0)
 				newcon->index = c->index;
 
@@ -2666,8 +2733,14 @@ void register_console(struct console *newcon)
 		break;
 	}
 
+	printk(">>>%s:%d con=%s\n", __func__, __LINE__, newcon->name);
+
 	if (!(newcon->flags & CON_ENABLED))
 		return;
+
+	printk(">>>%s:%d con=%s flags=%lx bcon=%lx def_lev=%d con_lev=%d\n", __func__, __LINE__,
+			newcon->name, newcon->flags, bcon,
+			default_message_loglevel, console_loglevel);
 
 	/*
 	 * If we have a bootconsole, and are switching to a real console,
@@ -2731,6 +2804,7 @@ void register_console(struct console *newcon)
 	pr_info("%sconsole [%s%d] enabled\n",
 		(newcon->flags & CON_BOOT) ? "boot" : "" ,
 		newcon->name, newcon->index);
+
 	if (bcon &&
 	    ((newcon->flags & (CON_CONSDEV | CON_BOOT)) == CON_CONSDEV) &&
 	    !keep_bootcon) {

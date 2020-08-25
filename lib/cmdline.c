@@ -233,6 +233,7 @@ char *next_arg(char *args, char **param, char **val)
 				args[i-1] = '\0';
 		}
 	}
+
 	if (quoted && args[i-1] == '"')
 		args[i-1] = '\0';
 

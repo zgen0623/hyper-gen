@@ -196,6 +196,7 @@ char *parse_args(const char *doing,
 		if (!val && strcmp(param, "--") == 0)
 			return err ?: args;
 		irq_was_disabled = irqs_disabled();
+
 		ret = parse_one(param, val, doing, params, num,
 				min_level, max_level, arg, unknown);
 		if (irq_was_disabled && !irqs_disabled())

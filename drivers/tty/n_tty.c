@@ -1269,6 +1269,16 @@ static int
 n_tty_receive_char_special(struct tty_struct *tty, unsigned char c)
 {
 	struct n_tty_data *ldata = tty->disc_data;
+//#define DEBUG_TTY_C
+
+#ifdef DEBUG_TTY_C
+	int print_mark = 0;
+	if (tty->name[3] == '3') {
+		printk(">>>%s:%d recv c=%x\n", __func__, __LINE__, c);
+		if (c == 0x4)
+			print_mark = 1;
+	}
+#endif
 
 	if (I_IXON(tty)) {
 		if (c == START_CHAR(tty)) {
@@ -1276,11 +1286,22 @@ n_tty_receive_char_special(struct tty_struct *tty, unsigned char c)
 			process_echoes(tty);
 			return 0;
 		}
+#ifdef DEBUG_TTY_C
+	if (print_mark) {
+		printk(">>>%s:%d\n", __func__, __LINE__);
+	}
+#endif
 		if (c == STOP_CHAR(tty)) {
 			stop_tty(tty);
 			return 0;
 		}
 	}
+#ifdef DEBUG_TTY_C
+	if (print_mark) {
+		printk(">>>%s:%d\n", __func__, __LINE__);
+	}
+#endif
+
 
 	if (L_ISIG(tty)) {
 		if (c == INTR_CHAR(tty)) {
@@ -1294,6 +1315,11 @@ n_tty_receive_char_special(struct tty_struct *tty, unsigned char c)
 			return 0;
 		}
 	}
+#ifdef DEBUG_TTY_C
+	if (print_mark) {
+		printk(">>>%s:%d\n", __func__, __LINE__);
+	}
+#endif
 
 	if (tty->stopped && !tty->flow_stopped && I_IXON(tty) && I_IXANY(tty)) {
 		start_tty(tty);
@@ -1315,6 +1341,11 @@ n_tty_receive_char_special(struct tty_struct *tty, unsigned char c)
 			commit_echoes(tty);
 			return 0;
 		}
+#ifdef DEBUG_TTY_C
+	if (print_mark) {
+		printk(">>>%s:%d\n", __func__, __LINE__);
+	}
+#endif
 		if (c == LNEXT_CHAR(tty) && L_IEXTEN(tty)) {
 			ldata->lnext = 1;
 			if (L_ECHO(tty)) {
@@ -1327,6 +1358,11 @@ n_tty_receive_char_special(struct tty_struct *tty, unsigned char c)
 			}
 			return 1;
 		}
+#ifdef DEBUG_TTY_C
+	if (print_mark) {
+		printk(">>>%s:%d\n", __func__, __LINE__);
+	}
+#endif
 		if (c == REPRINT_CHAR(tty) && L_ECHO(tty) && L_IEXTEN(tty)) {
 			size_t tail = ldata->canon_head;
 
@@ -1340,6 +1376,11 @@ n_tty_receive_char_special(struct tty_struct *tty, unsigned char c)
 			commit_echoes(tty);
 			return 0;
 		}
+#ifdef DEBUG_TTY_C
+	if (print_mark) {
+		printk(">>>%s:%d\n", __func__, __LINE__);
+	}
+#endif
 		if (c == '\n') {
 			if (L_ECHO(tty) || L_ECHONL(tty)) {
 				echo_char_raw('\n', ldata);
@@ -1347,12 +1388,27 @@ n_tty_receive_char_special(struct tty_struct *tty, unsigned char c)
 			}
 			goto handle_newline;
 		}
+
 		if (c == EOF_CHAR(tty)) {
+			put_tty_queue(c, ldata);
 			c = __DISABLED_CHAR;
 			goto handle_newline;
 		}
+
+#ifdef DEBUG_TTY_C
+	if (print_mark) {
+		printk(">>>%s:%d\n", __func__, __LINE__);
+	}
+#endif
+
 		if ((c == EOL_CHAR(tty)) ||
 		    (c == EOL2_CHAR(tty) && L_IEXTEN(tty))) {
+
+#ifdef DEBUG_TTY_C
+	if (print_mark) {
+		printk(">>>%s:%d\n", __func__, __LINE__);
+	}
+#endif
 			/*
 			 * XXX are EOL_CHAR and EOL2_CHAR echoed?!?
 			 */
@@ -1406,6 +1462,10 @@ n_tty_receive_char_inline(struct tty_struct *tty, unsigned char c)
 {
 	struct n_tty_data *ldata = tty->disc_data;
 
+	if (tty->name[3] == '3') {
+		printk(">>>%s:%d recv c=%x\n", __func__, __LINE__, c);
+	}
+
 	if (tty->stopped && !tty->flow_stopped && I_IXON(tty) && I_IXANY(tty)) {
 		start_tty(tty);
 		process_echoes(tty);
@@ -1433,6 +1493,10 @@ static inline void
 n_tty_receive_char_fast(struct tty_struct *tty, unsigned char c)
 {
 	struct n_tty_data *ldata = tty->disc_data;
+
+	if (tty->name[3] == '3') {
+		printk(">>>%s:%d recv c=%x\n", __func__, __LINE__, c);
+	}
 
 	if (tty->stopped && !tty->flow_stopped && I_IXON(tty) && I_IXANY(tty)) {
 		start_tty(tty);
@@ -1472,6 +1536,10 @@ static void n_tty_receive_char_closing(struct tty_struct *tty, unsigned char c)
 static void
 n_tty_receive_char_flagged(struct tty_struct *tty, unsigned char c, char flag)
 {
+	if (tty->name[3] == '3') {
+		printk(">>>%s:%d recv c=%x\n", __func__, __LINE__, c);
+	}
+
 	switch (flag) {
 	case TTY_BREAK:
 		n_tty_receive_break(tty);
@@ -1493,6 +1561,11 @@ static void
 n_tty_receive_char_lnext(struct tty_struct *tty, unsigned char c, char flag)
 {
 	struct n_tty_data *ldata = tty->disc_data;
+
+	if (tty->name[3] == '3') {
+		printk(">>>%s:%d recv c=%x\n", __func__, __LINE__, c);
+	}
+
 
 	ldata->lnext = 0;
 	if (likely(flag == TTY_NORMAL)) {
@@ -1566,6 +1639,7 @@ n_tty_receive_buf_standard(struct tty_struct *tty, const unsigned char *cp,
 	while (count--) {
 		if (fp)
 			flag = *fp++;
+
 		if (likely(flag == TTY_NORMAL)) {
 			unsigned char c = *cp++;
 
@@ -2401,6 +2475,9 @@ static unsigned int n_tty_poll(struct tty_struct *tty, struct file *file,
 							poll_table *wait)
 {
 	unsigned int mask = 0;
+
+//	printk(">>>%s:%d tty=%s read_head=%lx write_head=%lx table=%lx\n",
+//		 __func__, __LINE__, tty->name, &tty->read_wait, &tty->write_wait, wait);
 
 	poll_wait(file, &tty->read_wait, wait);
 	poll_wait(file, &tty->write_wait, wait);

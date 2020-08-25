@@ -92,6 +92,7 @@ static void sysrq_handle_loglevel(int key)
 	console_loglevel = CONSOLE_LOGLEVEL_DEFAULT;
 	pr_info("Loglevel set to %d\n", i);
 	console_loglevel = i;
+	printk(">>>%s:%d lev=%d\n", __func__, __LINE__, console_loglevel);
 }
 static struct sysrq_key_op sysrq_loglevel_op = {
 	.handler	= sysrq_handle_loglevel,
@@ -357,6 +358,7 @@ static void sysrq_handle_term(int key)
 {
 	send_sig_all(SIGTERM);
 	console_loglevel = CONSOLE_LOGLEVEL_DEBUG;
+	printk(">>>%s:%d lev=%d\n", __func__, __LINE__, console_loglevel);
 }
 static struct sysrq_key_op sysrq_term_op = {
 	.handler	= sysrq_handle_term,
@@ -412,6 +414,7 @@ static void sysrq_handle_kill(int key)
 {
 	send_sig_all(SIGKILL);
 	console_loglevel = CONSOLE_LOGLEVEL_DEBUG;
+	printk(">>>%s:%d lev=%d\n", __func__, __LINE__, console_loglevel);
 }
 static struct sysrq_key_op sysrq_kill_op = {
 	.handler	= sysrq_handle_kill,
@@ -547,8 +550,8 @@ void __handle_sysrq(int key, bool check_mask)
 	orig_log_level = console_loglevel;
 	console_loglevel = CONSOLE_LOGLEVEL_DEFAULT;
 
-        op_p = __sysrq_get_key_op(key);
-        if (op_p) {
+    op_p = __sysrq_get_key_op(key);
+    if (op_p) {
 		/*
 		 * Should we check for enabled operations (/proc/sysrq-trigger
 		 * should not) and is the invoked operation enabled?
@@ -579,6 +582,8 @@ void __handle_sysrq(int key, bool check_mask)
 		pr_cont("\n");
 		console_loglevel = orig_log_level;
 	}
+
+	printk(">>>%s:%d lev=%d\n", __func__, __LINE__, console_loglevel);
 	rcu_read_unlock();
 	rcu_sysrq_end();
 }

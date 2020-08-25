@@ -84,10 +84,20 @@ static int __wake_up_common(struct wait_queue_head *wq_head, unsigned int mode,
 	} else
 		curr = list_first_entry(&wq_head->head, wait_queue_entry_t, entry);
 
+	if (!curr) {
+		printk(">>>%s:%d\n", __func__, __LINE__);
+		return nr_exclusive;
+	}
+
 	if (&curr->entry == &wq_head->head)
 		return nr_exclusive;
 
 	list_for_each_entry_safe_from(curr, next, &wq_head->head, entry) {
+		if (curr->func == NULL) {
+			printk(">>>%s:%d wait=%lx head=%lx\n", __func__, __LINE__, curr, wq_head);
+			continue;
+		}
+
 		unsigned flags = curr->flags;
 		int ret;
 

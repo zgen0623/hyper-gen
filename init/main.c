@@ -999,6 +999,460 @@ static inline void mark_readonly(void)
 }
 #endif
 
+#include <uapi/asm-generic/ioctls.h>
+#include <uapi/asm-generic/termbits.h>
+#include <uapi/linux/kd.h>
+#include <uapi/asm-generic/fcntl.h>
+
+#define TTYDEF_IFLAG    (BRKINT | ISTRIP | ICRNL | IMAXBEL | IXON | IXANY)
+#define TTYDEF_OFLAG    (OPOST | ONLCR | XTABS)
+#define TTYDEF_LFLAG    (ECHO | ICANON | ISIG | IEXTEN | ECHOE|ECHOKE|ECHOCTL)
+#define TTYDEF_CFLAG    (CREAD | CS7 | PARENB | HUPCL)
+#define TTYDEF_SPEED    (B9600)
+
+#define CTRL(x) (x&037)
+#define CEOF        CTRL('d')
+
+#define CEOL       _POSIX_VDISABLE
+
+#define CERASE      0177
+#define CINTR       CTRL('c')
+
+#define CSTATUS    _POSIX_VDISABLE
+
+#define CKILL       CTRL('u')
+#define CMIN        1
+#define CQUIT       034     /* FS, ^\ */
+#define CSUSP       CTRL('z')
+#define CTIME       0
+#define CDSUSP      CTRL('y')
+#define CSTART      CTRL('q')
+#define CSTOP       CTRL('s')
+#define CLNEXT      CTRL('v')
+#define CDISCARD    CTRL('o')
+#define CWERASE     CTRL('w')
+#define CREPRINT    CTRL('r')
+#define CEOT        CEOF
+/* compat */
+#define CBRK        CEOL
+#define CRPRNT      CREPRINT
+#define CFLUSH      CDISCARD
+#define   _POSIX_VDISABLE '\0'
+
+#define CTL(x)      ((x) ^ 0100)    /* Assumes ASCII dialect */
+#define CR      CTL('M')    /* carriage return */
+#define NL      CTL('J')    /* line feed */
+#define BS      CTL('H')    /* back space */
+#define DEL     CTL('?')    /* delete */
+
+
+#define RX_READY 0
+
+struct my_work;
+typedef void (*my_work_fn_t)(struct my_work *work);
+
+struct my_work {
+	struct llist_node	  node;
+	my_work_fn_t		  fn;
+	void *opaque;
+	unsigned long		  flags;
+};
+
+struct my_poll {
+	poll_table                table;
+	wait_queue_head_t        *wqh;
+	wait_queue_entry_t              wait;
+	struct my_work	  work;
+	unsigned long		  mask;
+};
+
+enum tty_ctx_type {
+	HYPER_GEN,
+	VM_GEN,
+};
+
+struct my_tty_context {
+	char rx_buf[128];
+	int put_index;
+	int fd;
+	enum tty_ctx_type context_type;
+	void *vm_serial;
+	struct termios tp;
+};
+
+static bool tty_need_echo;
+static struct task_struct *hyper_gen_console_worker;
+static struct llist_head hyper_gen_work_list;
+static const char *prompt = "hyper-gen:#";
+
+static void reset_virtual_console(struct termios *tp)
+{
+    /* Use defaults of <sys/ttydefaults.h> for base settings */
+    tp->c_iflag |= TTYDEF_IFLAG;
+    tp->c_oflag |= TTYDEF_OFLAG;
+    tp->c_lflag |= TTYDEF_LFLAG;
+
+    tp->c_lflag &= ~CBAUD;
+    tp->c_cflag |= (B38400 | TTYDEF_CFLAG);
+
+    tp->c_iflag |=  (BRKINT | ICRNL | IMAXBEL);
+    tp->c_iflag &= ~(IGNBRK | INLCR | IGNCR | IXOFF | IUCLC | IXANY | ISTRIP);
+    tp->c_oflag |=  (OPOST | ONLCR | NL0 | CR0 | TAB0 | BS0 | VT0 | FF0);
+    tp->c_oflag &= ~(OLCUC | OCRNL | ONOCR | ONLRET | OFILL | \
+                NLDLY|CRDLY|TABDLY|BSDLY|VTDLY|FFDLY);
+    tp->c_lflag |=  (ISIG | ICANON | IEXTEN | ECHO|ECHOE|ECHOK|ECHOKE|ECHOCTL);
+    tp->c_lflag &= ~(ECHONL|ECHOPRT | NOFLSH | TOSTOP);
+
+    tp->c_cflag |=  (CREAD | CS8 | HUPCL);
+    tp->c_cflag &= ~(PARODD | PARENB);
+
+    tp->c_oflag &= ~OFDEL;
+    tp->c_lflag &= ~XCASE;
+
+    tp->c_iflag |= IUTF8;       /* Set UTF-8 input flag */
+
+    /* VTIME and VMIN can overlap with VEOF and VEOL since they are
+     * only used for non-canonical mode. We just set the at the
+     * beginning, so nothing bad should happen.
+     */
+    tp->c_cc[VTIME]    = 0;
+    tp->c_cc[VMIN]     = 1;
+    tp->c_cc[VINTR]    = CINTR;
+    tp->c_cc[VQUIT]    = CQUIT;
+    tp->c_cc[VERASE]   = CERASE; /* ASCII DEL (0177) */
+    tp->c_cc[VKILL]    = CKILL;
+    tp->c_cc[VEOF]     = CEOF;
+    tp->c_cc[VSWTC]    = _POSIX_VDISABLE;
+    tp->c_cc[VSTART]   = CSTART;
+    tp->c_cc[VSTOP]    = CSTOP;
+    tp->c_cc[VSUSP]    = CSUSP;
+    tp->c_cc[VEOL]     = _POSIX_VDISABLE;
+    tp->c_cc[VREPRINT] = CREPRINT;
+    tp->c_cc[VDISCARD] = CDISCARD;
+    tp->c_cc[VWERASE]  = CWERASE;
+    tp->c_cc[VLNEXT]   = CLNEXT;
+    tp->c_cc[VEOL2]    = _POSIX_VDISABLE;
+}
+
+static int hyper_gen_init_tty(struct my_tty_context *tty_ctx)
+{
+	int kbmode; 
+	int ret;
+	struct termios lock;
+	int fd;
+
+	sys_close(0);
+	sys_close(1);
+	sys_close(2);
+
+	if ((fd = sys_open((const char __user *) "/dev/tty3", O_RDWR, 0)) < 0) {
+		printk(">>>%s:%d\n", __func__, __LINE__);
+		return -1;
+	}
+
+	ret = sys_ioctl(fd, TCGETS, (const __user unsigned long)&tty_ctx->tp);
+	if (0 > ret) {
+		printk(">>>%s:%d\n", __func__, __LINE__);
+		return -1;
+	}
+
+	ret = sys_ioctl(fd, KDGKBMODE, (const __user unsigned long)&kbmode);
+	if (0 > ret) {
+		printk(">>>%s:%d\n", __func__, __LINE__);
+		return -1;
+	}
+
+	while (1) {
+		memset(&lock, 0, sizeof(struct termios));
+		if (sys_ioctl(fd, TIOCGLCKTRMIOS, (const __user unsigned long)&lock) < 0)
+            break;
+
+		if (!lock.c_iflag && !lock.c_oflag && !lock.c_cflag && !lock.c_lflag)
+            break;
+
+		msleep(1000);
+	}
+
+    memset(&lock, 0, sizeof(struct termios));
+    ret = sys_ioctl(fd, TIOCSLCKTRMIOS, (const __user unsigned long)&lock);
+	if (0 > ret) {
+		printk(">>>%s:%d\n", __func__, __LINE__);
+		return -1;
+	}
+
+	reset_virtual_console(&tty_ctx->tp);
+	ret = sys_ioctl(fd, TCSETSW, (const __user unsigned long)&tty_ctx->tp);
+	if (0 > ret) {
+		printk(">>>%s:%d\n", __func__, __LINE__);
+		return -1;
+	}
+
+#if 0
+    sys_fcntl(fd, F_SETFL,
+          sys_fcntl(fd, F_GETFL, 0) & ~O_NONBLOCK);
+#else
+    sys_fcntl(fd, F_SETFL,
+          sys_fcntl(fd, F_GETFL, 0) | O_NONBLOCK);
+#endif
+
+	tty_need_echo = !((tty_ctx->tp.c_lflag) & ECHO);
+
+	return fd;
+}
+
+
+static int my_poll_wakeup(wait_queue_entry_t *wait, unsigned mode, int sync,
+			     void *key)
+{
+	struct my_poll *poll = container_of(wait, struct my_poll, wait);
+
+ 	if (!((unsigned long)key & poll->mask))
+ 		return 0;
+
+	if (!test_and_set_bit(RX_READY, &poll->work.flags)) {
+		llist_add(&poll->work.node, &hyper_gen_work_list);
+		wake_up_process(hyper_gen_console_worker);
+	}
+
+	return 0;
+}
+
+static void my_poll_func(struct file *file, wait_queue_head_t *wqh,
+			    poll_table *pt)
+{
+	struct my_poll *poll;
+
+	poll = container_of(pt, struct my_poll, table);
+	if (poll->wqh != NULL)
+		return;
+
+	//only hook read_wait
+	poll->wqh = wqh;
+
+	add_wait_queue(wqh, &poll->wait);
+}
+
+static bool parse_cmd(struct my_tty_context *ctx)
+{
+	char tmp[32];
+	char *param;
+	char *args = ctx->rx_buf;
+
+	args = skip_spaces(args);
+	param = strsep(&args, " ");
+
+	if (!strcmp(param, "vm_console")) {
+		unsigned long vm_id;
+		int ret;
+		char *val;
+
+		val = strsep(&args, " ");
+		if (!val)
+			goto fail_val;
+
+		ret = kstrtoul(val, 0, &vm_id);
+		if (ret)
+			goto fail_val;
+
+		//1. find vm with vm_id
+		//2. hook fd to vserial tx of vm
+		sprintf(tmp, "%s\n", "Match Cmd");
+		sys_write(ctx->fd, (const char __user *)tmp, strlen(tmp));
+		ctx->context_type = VM_GEN;
+	} else {
+		sprintf(tmp, "%s\n", "Invalid Cmd");
+		goto fail;
+	}
+
+	return false;
+
+fail_val:
+	sprintf(tmp, "%s\n", "Invalid Val");
+fail:
+	sys_write(ctx->fd, (const char __user *)tmp, strlen(tmp));
+	return true;
+}
+
+static void stop_vm_console(struct my_tty_context *ctx)
+{
+	//1. dishook fd to vserial tx
+	ctx->vm_serial = NULL;
+	ctx->context_type = HYPER_GEN;
+}
+
+static bool dump_to_vm(struct my_tty_context *ctx)
+{
+	//1. find current vserial
+	//2. dump ctx->rx_buf to vserial 
+
+	return false;
+}
+
+static char *put_char(struct my_tty_context *ctx, char *bp, char c)
+{
+	if ((size_t)(bp - ctx->rx_buf) >= sizeof(ctx->rx_buf) - 1) {
+		bp = ctx->rx_buf;
+		ctx->put_index = 0;
+	}
+
+	*bp++ = c;         /* and store it */
+	ctx->put_index++;
+
+	return bp;
+}
+
+static void handle_tty_rx(struct my_work *work)
+{
+    static char *erase[] = {    /* backspace-space-backspace */
+        "\010\040\010",     /* space parity */
+        "\010\040\010",     /* odd parity */
+        "\210\240\210",     /* even parity */
+        "\210\240\210",     /* no parity */
+    };
+
+	struct my_tty_context *ctx = work->opaque;
+	char *bp = ctx->rx_buf + ctx->put_index;
+	char key;
+	int ret;
+	char eol;
+	bool need_prompt = true;
+
+	eol = '\0';
+	while (eol == '\0') {
+		ret = sys_read(ctx->fd, (char __user *)&key, 1);
+		if (ret <= 0)
+			return;
+
+    	switch (key) {
+		case CR:
+		case NL:
+			if (ctx->context_type == HYPER_GEN) {
+				*bp = 0;            /* terminate logname */
+			} else if (ctx->context_type == VM_GEN) {
+				bp = put_char(ctx, bp, key);
+			}
+			eol = key;       /* set end-of-line char */
+			break;
+		case BS:
+		case DEL:
+			if (bp > ctx->rx_buf) {
+				if (tty_need_echo)
+					sys_write(ctx->fd, (const char __user *)erase[0], 3);
+				bp--;
+				ctx->put_index--;
+			}
+			break;
+		case CTL('D'):
+			//1. if in vm context, switch to hyper-gen
+			if (ctx->context_type == VM_GEN) {
+				stop_vm_console(ctx);
+				sys_write(ctx->fd, (const char __user *)"\n", 1);
+				sys_write(ctx->fd, (const char __user *)prompt, strlen(prompt));
+			}
+			break;
+		default:
+			bp = put_char(ctx, bp, key);
+			if (tty_need_echo)
+				sys_write(ctx->fd, (const char __user *)&key, 1);
+			break;
+		}
+	}
+
+	if (ctx->context_type == HYPER_GEN) {
+		need_prompt = parse_cmd(ctx);
+	} else if (ctx->context_type == VM_GEN) {
+		need_prompt = dump_to_vm(ctx);
+	}
+
+	if (need_prompt)
+		sys_write(ctx->fd, (const char __user *)prompt, strlen(prompt));
+
+	ctx->put_index = 0;
+}
+
+static int hyper_gen_console(void *data)
+{
+	int fd;
+	struct my_poll poll;
+	struct file *file;
+	unsigned long mask;
+	struct my_tty_context my_tty_ctx;
+
+	//suppress console log at first
+	console_loglevel = default_message_loglevel;
+
+	fd = hyper_gen_init_tty(&my_tty_ctx);
+	if (fd < 0) {
+		printk(">>>%s:%d\n", __func__, __LINE__);
+		return 0;
+	}
+
+	INIT_LIST_HEAD(&poll.wait.entry);
+	//init_waitqueue_head(&poll.wait);
+	init_waitqueue_func_entry(&poll.wait, my_poll_wakeup);
+	init_poll_funcptr(&poll.table, my_poll_func);
+	poll.mask = POLLIN;
+	poll.wqh = NULL;
+
+	poll.work.flags = 0;
+	poll.work.fn = handle_tty_rx;
+
+	my_tty_ctx.put_index = 0;
+	my_tty_ctx.fd = fd; 
+	my_tty_ctx.context_type = HYPER_GEN;
+	my_tty_ctx.vm_serial = NULL;
+	poll.work.opaque = (void*)&my_tty_ctx;
+
+	init_llist_head(&hyper_gen_work_list);
+
+    file = fget(fd);
+    if (!file) {
+		printk(">>>%s:%d\n", __func__, __LINE__);
+        return 0;
+    }
+
+	mask = file->f_op->poll(file, &poll.table);
+	if (mask)
+		my_poll_wakeup(&poll.wait, 0, 0, (void *)mask);
+
+	if (mask & POLLERR) {
+		printk(">>>%s:%d\n", __func__, __LINE__);
+        return 0;
+	}
+
+	sys_write(fd, (const char __user *)prompt, strlen(prompt));
+
+	while (1) {
+		struct llist_node *node;
+		struct my_work *work, *work_next;
+
+		set_current_state(TASK_INTERRUPTIBLE);
+
+		if (kthread_should_stop()) {
+			__set_current_state(TASK_RUNNING);
+			break;
+		}
+
+		node = llist_del_all(&hyper_gen_work_list);
+		if (!node)
+			schedule();
+
+		node = llist_reverse_order(node);
+
+		smp_wmb();
+		llist_for_each_entry_safe(work, work_next, node, node) {
+			clear_bit(RX_READY, &work->flags);
+			__set_current_state(TASK_RUNNING);
+			work->fn(work);
+			if (need_resched())
+				schedule();
+		}
+
+	}
+
+	return 0;
+}
+
 static int __ref kernel_init(void *unused)
 {
 	int ret;
@@ -1020,6 +1474,18 @@ static int __ref kernel_init(void *unused)
 	numa_default_policy();
 
 	rcu_end_inkernel_boot();
+
+	hyper_gen_console_worker = kthread_create(hyper_gen_console, NULL, "hyper-gen-console");
+	if (IS_ERR(hyper_gen_console_worker)) {
+		printk(">>>>%s:%d\n", __func__, __LINE__);
+	}
+	wake_up_process(hyper_gen_console_worker);	/* avoid contributing to loadavg */
+
+#if 0
+	while (true) {
+		asm volatile("hlt");
+	}
+#endif
 
 	if (ramdisk_execute_command) {
 		ret = run_init_process(ramdisk_execute_command);

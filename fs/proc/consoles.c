@@ -64,6 +64,7 @@ static void *c_start(struct seq_file *m, loff_t *pos)
 {
 	struct console *con;
 	loff_t off = 0;
+	printk(">>>%s:%d\n", __func__, __LINE__);
 
 	console_lock();
 	for_each_console(con)

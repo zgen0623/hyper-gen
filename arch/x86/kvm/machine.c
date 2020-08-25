@@ -777,6 +777,7 @@ void *get_vserial_rx_buf(struct vserial *vser)
 }
 
 
+#ifdef TIMER_TEST
 struct my_poll_test {
 	struct hrtimer poll_timer;
 	struct kvm *kvm;
@@ -811,6 +812,7 @@ static enum hrtimer_restart poll_timer_fn(struct hrtimer *data)
 	} else
 		return HRTIMER_NORESTART;
 }
+#endif
 
 static void create_vserial(struct kvm *kvm)
 {
@@ -844,12 +846,15 @@ static void create_vserial(struct kvm *kvm)
 
 	kvm->vdevices.vserial = vser;
 
+#ifdef TIMER_TEST
 	//poll test
 	poll_test.kvm = kvm;
+
 	hrtimer_init(&poll_test.poll_timer, CLOCK_MONOTONIC, HRTIMER_MODE_ABS);
 	poll_test.poll_timer.function = poll_timer_fn;
 	hrtimer_start(&poll_test.poll_timer, ktime_add_ns(ktime_get(), 1000*1000*1000),
 		      HRTIMER_MODE_ABS);
+#endif
 }
 
 static void destroy_vserial(struct kvm *kvm)
@@ -865,10 +870,17 @@ static void destroy_vserial(struct kvm *kvm)
 	if (vser->rx_buf)
 		free_page((unsigned long)vser->tx_buf);
 
+#ifdef TIMER_TEST
 	hrtimer_cancel(&poll_test.poll_timer);
+#endif
 
 	kfree(vser);
 }
+
+#define PRINTK_TEST
+
+int my_start = 0;
+uint64_t my_mark = 0;
 
 int create_virt_machine(struct kvm *kvm)
 {
@@ -958,7 +970,12 @@ int create_virt_machine(struct kvm *kvm)
 	create_vserial(kvm);
 
 
-//	printk(">>>>%s:%d\n", __func__, __LINE__);
+#ifdef PRINTK_TEST
+	my_start = 1;
+	printk(">>>>%s:%d\n", __func__, __LINE__);
+	my_start = 0;
+	printk(">>>>%s:%d my_mark=%lx\n", __func__, __LINE__, my_mark);
+#endif
 
 create_irqchip_unlock:
 	mutex_unlock(&kvm->lock);

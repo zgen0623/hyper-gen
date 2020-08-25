@@ -473,6 +473,11 @@ static void tty_show_fdinfo(struct seq_file *m, struct file *file)
 		tty->ops->show_fdinfo(tty, m);
 }
 
+static int tty_tty_open(struct inode *inode, struct file *filp)
+{
+	return tty_open(inode, filp);
+}
+
 static const struct file_operations tty_fops = {
 	.llseek		= no_llseek,
 	.read		= tty_read,
@@ -480,11 +485,18 @@ static const struct file_operations tty_fops = {
 	.poll		= tty_poll,
 	.unlocked_ioctl	= tty_ioctl,
 	.compat_ioctl	= tty_compat_ioctl,
-	.open		= tty_open,
+	.open		= tty_tty_open,
 	.release	= tty_release,
 	.fasync		= tty_fasync,
 	.show_fdinfo	= tty_show_fdinfo,
 };
+
+static int console_tty_open(struct inode *inode, struct file *filp)
+{
+//	dump_stack();
+//	printk(">>>%s:%d\n", __func__, __LINE__);
+	return tty_open(inode, filp);
+}
 
 static const struct file_operations console_fops = {
 	.llseek		= no_llseek,
@@ -493,7 +505,7 @@ static const struct file_operations console_fops = {
 	.poll		= tty_poll,
 	.unlocked_ioctl	= tty_ioctl,
 	.compat_ioctl	= tty_compat_ioctl,
-	.open		= tty_open,
+	.open		= console_tty_open,
 	.release	= tty_release,
 	.fasync		= tty_fasync,
 };
@@ -853,6 +865,11 @@ static ssize_t tty_read(struct file *file, char __user *buf, size_t count,
 	struct tty_struct *tty = file_tty(file);
 	struct tty_ldisc *ld;
 
+#if 0
+	if (tty->name[3] == '2')
+		printk(">>>>%s:%d tty=%s\n", __func__, __LINE__, tty->name);
+#endif
+
 	if (tty_paranoia_check(tty, inode, "tty_read"))
 		return -EIO;
 	if (!tty || tty_io_error(tty))
@@ -1027,6 +1044,11 @@ static ssize_t tty_write(struct file *file, const char __user *buf,
 	struct tty_struct *tty = file_tty(file);
  	struct tty_ldisc *ld;
 	ssize_t ret;
+
+#if 0
+	if (tty->name[3] == '2')
+		printk(">>>>%s:%d tty=%s\n", __func__, __LINE__,tty->name);
+#endif
 
 	if (tty_paranoia_check(tty, file_inode(file), "tty_write"))
 		return -EIO;
@@ -1654,6 +1676,11 @@ int tty_release(struct inode *inode, struct file *filp)
 	long	timeout = 0;
 	int	once = 1;
 
+#if 0
+	if (tty->name[3] == '2')
+		printk(">>>>%s:%d tty=%s\n", __func__, __LINE__, tty->name);
+#endif
+
 	if (tty_paranoia_check(tty, inode, __func__))
 		return 0;
 
@@ -1848,6 +1875,7 @@ static struct tty_driver *tty_lookup_driver(dev_t device, struct file *filp,
 	}
 #endif
 	case MKDEV(TTYAUX_MAJOR, 1): {
+	//	dump_stack();
 		struct tty_driver *console_driver = console_device(index);
 		if (console_driver) {
 			driver = tty_driver_kref_get(console_driver);
@@ -1888,6 +1916,8 @@ struct tty_struct *tty_kopen(dev_t device)
 	struct tty_struct *tty;
 	struct tty_driver *driver = NULL;
 	int index = -1;
+
+	dump_stack();
 
 	mutex_lock(&tty_mutex);
 	driver = tty_lookup_driver(device, NULL, &index);
@@ -2039,6 +2069,11 @@ retry_open:
 
 	tty_add_file(tty, filp);
 
+#if 0
+	if (tty->name[3] == '2')
+		printk(">>>>%s:%d tty=%s\n", __func__, __LINE__, tty->name);
+#endif
+
 	check_tty_count(tty, __func__);
 	tty_debug_hangup(tty, "opening (count=%d)\n", tty->count);
 
@@ -2046,6 +2081,7 @@ retry_open:
 		retval = tty->ops->open(tty, filp);
 	else
 		retval = -ENODEV;
+
 	filp->f_flags = saved_flags;
 
 	if (retval) {
@@ -2077,6 +2113,9 @@ retry_open:
 	if (!noctty)
 		tty_open_proc_set_tty(filp, tty);
 	tty_unlock(tty);
+
+	//printk(">>>%s:%d tty=%s\n", __func__, __LINE__, tty->name);
+
 	return 0;
 }
 
@@ -2100,15 +2139,43 @@ static unsigned int tty_poll(struct file *filp, poll_table *wait)
 	struct tty_ldisc *ld;
 	int ret = 0;
 
+#if 0
+	if (tty->name[3] == '2') {
+		printk(">>>>%s:%d tty=%s\n", __func__, __LINE__, tty->name);
+//		dump_stack();
+	}
+#endif
+
 	if (tty_paranoia_check(tty, file_inode(filp), "tty_poll"))
 		return 0;
 
 	ld = tty_ldisc_ref_wait(tty);
-	if (!ld)
-		return hung_up_tty_poll(filp, wait);
+	if (!ld) {
+#if 0
+		if (tty->name[3] == '2')
+			printk(">>>>%s:%d\n", __func__, __LINE__);
+#endif
+
+		ret = hung_up_tty_poll(filp, wait);
+
+#if 0
+		if (tty->name[3] == '2')
+			printk(">>>>%s:%d\n", __func__, __LINE__);
+#endif
+
+		return ret;
+	}
+
 	if (ld->ops->poll)
 		ret = ld->ops->poll(tty, filp, wait);
+
 	tty_ldisc_deref(ld);
+
+#if 0 
+	if (tty->name[3] == '2')
+		printk(">>>>%s:%d\n", __func__, __LINE__);
+#endif
+
 	return ret;
 }
 
@@ -2547,6 +2614,11 @@ long tty_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 	int retval;
 	struct tty_ldisc *ld;
 
+#if 0
+	if (tty->name[3] == '2')
+		printk(">>>>%s:%d tty=%s\n", __func__, __LINE__, tty->name);
+#endif
+
 	if (tty_paranoia_check(tty, file_inode(file), "tty_ioctl"))
 		return -EINVAL;
 
@@ -2690,6 +2762,11 @@ static long tty_compat_ioctl(struct file *file, unsigned int cmd,
 	struct tty_struct *tty = file_tty(file);
 	struct tty_ldisc *ld;
 	int retval = -ENOIOCTLCMD;
+
+#if 0
+	if (tty->name[3] == '2')
+		printk(">>>>%s:%d tty=%s\n", __func__, __LINE__, tty->name);
+#endif
 
 	if (tty_paranoia_check(tty, file_inode(file), "tty_ioctl"))
 		return -EINVAL;

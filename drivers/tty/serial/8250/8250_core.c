@@ -1135,12 +1135,8 @@ static int __init serial8250_init(void)
 	pr_info("Serial: 8250/16550 driver, %d ports, IRQ sharing %sabled\n",
 		nr_uarts, share_irqs ? "en" : "dis");
 
-#ifdef CONFIG_SPARC
-	ret = sunserial_register_minors(&serial8250_reg, UART_NR);
-#else
 	serial8250_reg.nr = UART_NR;
 	ret = uart_register_driver(&serial8250_reg);
-#endif
 	if (ret)
 		goto out;
 
