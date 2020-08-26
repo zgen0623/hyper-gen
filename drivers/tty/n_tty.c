@@ -1494,9 +1494,11 @@ n_tty_receive_char_fast(struct tty_struct *tty, unsigned char c)
 {
 	struct n_tty_data *ldata = tty->disc_data;
 
+#if 0
 	if (tty->name[3] == '3') {
 		printk(">>>%s:%d recv c=%x\n", __func__, __LINE__, c);
 	}
+#endif
 
 	if (tty->stopped && !tty->flow_stopped && I_IXON(tty) && I_IXANY(tty)) {
 		start_tty(tty);

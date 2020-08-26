@@ -3,6 +3,7 @@
 
 #include "vpci.h"
 #include "vblk.h"
+#include "regs.h"
 
 //the following are hardcode for tempolory
 #define CPUS 2

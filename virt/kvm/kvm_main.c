@@ -740,12 +740,15 @@ struct kvm *find_kvm_by_id(uint64_t kvm_id)
 	mutex_lock(&kvm_lock);
 
 	list_for_each_entry(kvm, &vm_list, vm_list) {
-		if (kvm->id == kvm_id)
-			break;
+		if (kvm->id == kvm_id) {
+			mutex_unlock(&kvm_lock);
+			return kvm;
+		}
 	}
 
 	mutex_unlock(&kvm_lock);
-	return kvm;
+
+	return NULL;
 }
 
 

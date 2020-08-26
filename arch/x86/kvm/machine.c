@@ -34,6 +34,7 @@
 #include "vpci.h"
 #include "vblk.h"
 #include "vnet.h"
+#include "vser.h"
 #include <linux/hugetlb.h>
 #include <uapi/asm-generic/poll.h>
 
@@ -761,127 +762,6 @@ static void destroy_vI8042(struct kvm *kvm)
 	kfree(i8042);
 }
 
-struct vserial {
-	void *tx_buf;
-	void *rx_buf;
-};
-
-void *get_vserial_tx_buf(struct vserial *vser)
-{
-	return vser->tx_buf;
-}
-
-void *get_vserial_rx_buf(struct vserial *vser)
-{
-	return vser->rx_buf;
-}
-
-
-#ifdef TIMER_TEST
-struct my_poll_test {
-	struct hrtimer poll_timer;
-	struct kvm *kvm;
-};
-
-static struct my_poll_test poll_test;
-static int poll_cnt = 0;
-
-static enum hrtimer_restart poll_timer_fn(struct hrtimer *data)
-{
-	struct my_poll_test *test = container_of(data, struct my_poll_test, poll_timer);
-	struct kvm *kvm = test->kvm;
-	struct gen_shm *shm = kvm->gen_shm;
-	struct gen_event *gen_evt = &shm->gen_evt;
-
-	gen_evt->evt_put_idx = (gen_evt->evt_put_idx + 1) % PAGE_SIZE;
-
-	if (gen_evt->evt_put_idx == gen_evt->evt_get_idx)
-		gen_evt->evt_get_idx = (gen_evt->evt_get_idx + 1) % PAGE_SIZE;
-
-	//put event here
-
-	printk(">>>>%s:%d get=%d put=%d\n", __func__, __LINE__, gen_evt->evt_get_idx, gen_evt->evt_put_idx);
-
-	wait_queue_head_t *head = &kvm->gen_evt_wait_head;
-	if (gen_evt->evt_put_idx != gen_evt->evt_get_idx && waitqueue_active(head))
-		wake_up_interruptible_poll(head, POLLIN | POLLRDNORM | POLLRDBAND);
-
-	if (poll_cnt <= 10) {
-		hrtimer_add_expires_ns(&test->poll_timer, 1000*1000*1000);
-		return HRTIMER_RESTART;
-	} else
-		return HRTIMER_NORESTART;
-}
-#endif
-
-static void create_vserial(struct kvm *kvm)
-{
-    struct vserial *vser;
-	struct page *page;
-
-	vser = kzalloc(sizeof(struct vserial), GFP_KERNEL);
-	if (!vser) {
-		printk(">>>>>error %s:%d\n", __func__, __LINE__);
-		return;
-	}
-
-	page = alloc_page(GFP_KERNEL | __GFP_ZERO);
-	if (page)
-		vser->tx_buf = page_address(page);
-	else
-		printk(">>>>%s:%d\n", __func__, __LINE__);
-
-	page = alloc_page(GFP_KERNEL | __GFP_ZERO);
-	if (page)
-		vser->rx_buf = page_address(page);
-	else
-		printk(">>>>%s:%d\n", __func__, __LINE__);
-
-	kvm->gen_shm->vser_info.tx_buf_offset = PAGE_SIZE;
-	kvm->gen_shm->vser_info.tx_put_idx = 0;
-	kvm->gen_shm->vser_info.tx_get_idx = 0;
-	kvm->gen_shm->vser_info.rx_buf_offset = PAGE_SIZE + PAGE_SIZE;
-	kvm->gen_shm->vser_info.rx_put_idx = 0;
-	kvm->gen_shm->vser_info.rx_get_idx = 0;
-
-	kvm->vdevices.vserial = vser;
-
-#ifdef TIMER_TEST
-	//poll test
-	poll_test.kvm = kvm;
-
-	hrtimer_init(&poll_test.poll_timer, CLOCK_MONOTONIC, HRTIMER_MODE_ABS);
-	poll_test.poll_timer.function = poll_timer_fn;
-	hrtimer_start(&poll_test.poll_timer, ktime_add_ns(ktime_get(), 1000*1000*1000),
-		      HRTIMER_MODE_ABS);
-#endif
-}
-
-static void destroy_vserial(struct kvm *kvm)
-{
-    struct vserial *vser = kvm->vdevices.vserial;
-
-	if (!vser)
-		return;
-
-	if (vser->tx_buf)
-		free_page((unsigned long)vser->tx_buf);
-
-	if (vser->rx_buf)
-		free_page((unsigned long)vser->tx_buf);
-
-#ifdef TIMER_TEST
-	hrtimer_cancel(&poll_test.poll_timer);
-#endif
-
-	kfree(vser);
-}
-
-#define PRINTK_TEST
-
-int my_start = 0;
-uint64_t my_mark = 0;
-
 int create_virt_machine(struct kvm *kvm)
 {
 	int r;
@@ -946,9 +826,10 @@ int create_virt_machine(struct kvm *kvm)
 		kvm->gen_shm->gen_evt.evt_put_idx = 0;
 		kvm->gen_shm->gen_evt.evt_get_idx = 0;
 		page = alloc_page(GFP_KERNEL | __GFP_ZERO);
-		if (page) {
+		if (page)
 			kvm->gen_evt_buf = page_address(page);
-		}
+		else
+			printk(">>>>%s:%d\n", __func__, __LINE__);
 	} else {
 		printk(">>>>%s:%d\n", __func__, __LINE__);
 		r = -ENOMEM;
@@ -968,14 +849,6 @@ int create_virt_machine(struct kvm *kvm)
 	create_vblk(kvm);
 	create_vnet(kvm);
 	create_vserial(kvm);
-
-
-#ifdef PRINTK_TEST
-	my_start = 1;
-	printk(">>>>%s:%d\n", __func__, __LINE__);
-	my_start = 0;
-	printk(">>>>%s:%d my_mark=%lx\n", __func__, __LINE__, my_mark);
-#endif
 
 create_irqchip_unlock:
 	mutex_unlock(&kvm->lock);
@@ -1002,6 +875,7 @@ void destroy_virt_machine(struct kvm *kvm)
 
 	if (kvm->gen_evt_buf)
 		free_page((unsigned long)kvm->gen_evt_buf);
-//	printk(">>>>>%s:%d\n", __func__, __LINE__);
+
+	printk(">>>%s:%d\n", __func__, __LINE__);
 }
 
