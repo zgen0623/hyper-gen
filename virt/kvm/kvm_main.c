@@ -3508,6 +3508,7 @@ static long kvm_vm_compat_ioctl(struct file *filp,
 }
 #endif
 
+#if 0
 void *get_vserial_tx_buf(struct vserial *vser);
 void *get_vserial_rx_buf(struct vserial *vser);
 
@@ -3541,7 +3542,9 @@ static int kvm_vm_mmap(struct file *file, struct vm_area_struct *vma)
 	vma->vm_ops = &kvm_vm_vm_ops;
 	return 0;
 }
+#endif
 
+#if 0
 static unsigned int kvm_vm_poll(struct file *file, poll_table *wait)
 {
 	struct kvm *vm = file->private_data;
@@ -3557,6 +3560,7 @@ static unsigned int kvm_vm_poll(struct file *file, poll_table *wait)
 
 	return mask;
 }
+#endif
 
 static struct file_operations kvm_vm_fops = {
 	.release        = kvm_vm_release,
@@ -3564,9 +3568,9 @@ static struct file_operations kvm_vm_fops = {
 #ifdef CONFIG_KVM_COMPAT
 	.compat_ioctl   = kvm_vm_compat_ioctl,
 #endif
-	.mmap           = kvm_vm_mmap,
+//	.mmap           = kvm_vm_mmap,
 	.llseek		= noop_llseek,
-	.poll	= kvm_vm_poll,
+//	.poll	= kvm_vm_poll,
 };
 
 static int kvm_dev_ioctl_create_vm(unsigned long type)

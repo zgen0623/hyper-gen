@@ -90,8 +90,10 @@ struct vserial {
 	struct kvm_io_device dev;
 
 	struct kvm *kvm;
+#if 0
 	void *tx_buf;
 	void *rx_buf;
+#endif
 //	atomic_t tx_fd;
 //	int tx_fd;
 //	struct file *tx_file;
@@ -129,6 +131,7 @@ void deattach_to_vser(struct kvm *kvm, wait_queue_entry_t *wait)
 	kvm_put_kvm(kvm);
 }
 
+#if 0
 void *get_vserial_tx_buf(struct vserial *vser)
 {
 	return vser->tx_buf;
@@ -138,6 +141,7 @@ void *get_vserial_rx_buf(struct vserial *vser)
 {
 	return vser->rx_buf;
 }
+#endif
 
 static void fifo8_destroy(Fifo8 *fifo)
 {   
@@ -673,6 +677,7 @@ void create_vserial(struct kvm *kvm)
 		return;
 	}
 
+#if 0
 	page = alloc_page(GFP_KERNEL | __GFP_ZERO);
 	if (page)
 		vser->tx_buf = page_address(page);
@@ -691,6 +696,7 @@ void create_vserial(struct kvm *kvm)
 	kvm->gen_shm->vser_info.rx_buf_offset = PAGE_SIZE + PAGE_SIZE;
 	kvm->gen_shm->vser_info.rx_put_idx = 0;
 	kvm->gen_shm->vser_info.rx_get_idx = 0;
+#endif
 
 
 	hrtimer_init(&vser->fifo_timeout_timer, CLOCK_MONOTONIC, HRTIMER_MODE_ABS);
@@ -721,7 +727,7 @@ void create_vserial(struct kvm *kvm)
     serial_reset(vser);
 
 
-#ifdef TIMER_TEST
+#if 0
 	timer_test(kvm);
 #endif
 
@@ -740,15 +746,17 @@ void destroy_vserial(struct kvm *kvm)
 	if (!vser)
 		return;
 
+#if 0
 	if (vser->tx_buf)
 		free_page((unsigned long)vser->tx_buf);
 
 	if (vser->rx_buf)
 		free_page((unsigned long)vser->tx_buf);
+#endif
 
 	hrtimer_cancel(&vser->fifo_timeout_timer);
 
-#ifdef TIMER_TEST
+#if 0
 	hrtimer_cancel(&poll_test.poll_timer);
 #endif
 
@@ -765,7 +773,7 @@ void destroy_vserial(struct kvm *kvm)
 
 
 
-#ifdef TIMER_TEST
+#if 0
 struct my_poll_test {
 	struct hrtimer poll_timer;
 	struct kvm *kvm;

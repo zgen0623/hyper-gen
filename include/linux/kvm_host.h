@@ -550,9 +550,11 @@ struct kvm {
 	int ent_allocated;
 	struct list_head evt_list;
 
+#if 0
 	struct gen_shm *gen_shm;
 	void *gen_evt_buf;
 	wait_queue_head_t	gen_evt_wait_head;
+#endif
 };
 
 #define kvm_err(fmt, ...) \

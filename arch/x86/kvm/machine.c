@@ -828,6 +828,7 @@ int create_virt_machine(struct kvm *kvm)
 
 	INIT_LIST_HEAD(&kvm->evt_list);
 
+#if 0
 	init_waitqueue_head(&kvm->gen_evt_wait_head);
 
 	page = alloc_page(GFP_KERNEL | __GFP_ZERO);
@@ -846,6 +847,7 @@ int create_virt_machine(struct kvm *kvm)
 		r = -ENOMEM;
 		goto create_irqchip_unlock;
 	}
+#endif
 
 	create_vmem(kvm);
 
@@ -873,8 +875,10 @@ void destroy_virt_machine(struct kvm *kvm)
 {
 	vfree(kvm->possible_cpus);
 
+#if 0
 	if (kvm->gen_shm)
 		free_page((unsigned long)kvm->gen_shm);
+#endif
 
 	destroy_vserial(kvm);
 	destroy_vnet(kvm);
@@ -887,8 +891,10 @@ void destroy_virt_machine(struct kvm *kvm)
 
 	destroy_vmem(kvm);
 
+#if 0
 	if (kvm->gen_evt_buf)
 		free_page((unsigned long)kvm->gen_evt_buf);
+#endif
 
 	printk(">>>%s:%d\n", __func__, __LINE__);
 }
