@@ -2870,6 +2870,8 @@ bool vm_running(struct kvm *vm)
 }
 EXPORT_SYMBOL_GPL(vm_running);
 
+void dump_current_cfs_rq_tg(void);
+
 static long kvm_vcpu_ioctl(struct file *filp,
 			   unsigned int ioctl, unsigned long arg)
 {
@@ -2899,6 +2901,14 @@ static long kvm_vcpu_ioctl(struct file *filp,
 	r = vcpu_load(vcpu);
 	if (r)
 		return r;
+
+	static int mark;
+	if (!(mark & (1 << vcpu->vcpu_id))) {
+		printk(">>>>%s:%d qemu_vcpu\n", __func__, __LINE__);
+		dump_current_cfs_rq_tg();
+		mark |= 1 << vcpu->vcpu_id;
+	}
+
 	switch (ioctl) {
 	case KVM_RUN: {
 		struct pid *oldpid;
@@ -2918,7 +2928,6 @@ static long kvm_vcpu_ioctl(struct file *filp,
 
 		atomic_inc(&vcpu->kvm->running_vcpus);
 
-//	printk(">>>>>>%s:%d cnt=%d\n", __func__, __LINE__, page_ref_count(my_page));
 		r = kvm_arch_vcpu_ioctl_run(vcpu, vcpu->run);
 		trace_kvm_userspace_exit(vcpu->run->exit_reason, r);
 		break;

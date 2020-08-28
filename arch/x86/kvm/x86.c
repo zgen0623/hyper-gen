@@ -7650,10 +7650,8 @@ int kvm_arch_vcpu_ioctl_run(struct kvm_vcpu *vcpu, struct kvm_run *kvm_run)
 	kvm_sigset_activate(vcpu);
 
 	kvm_load_guest_fpu(vcpu);
-//	printk(">>>>>>%s:%d id=%d\n", __func__, __LINE__, vcpu->vcpu_id);
 
 	if (unlikely(vcpu->arch.mp_state == KVM_MP_STATE_UNINITIALIZED)) {
-//		printk(">>>>>>%s:%d id=%d\n", __func__, __LINE__, vcpu->vcpu_id);
 		if (kvm_run->immediate_exit) {
 			r = -EINTR;
 			goto out;
@@ -7682,8 +7680,6 @@ int kvm_arch_vcpu_ioctl_run(struct kvm_vcpu *vcpu, struct kvm_run *kvm_run)
 	if (kvm_run->immediate_exit)
 		r = -EINTR;
 	else {
-	//	if (vcpu->vcpu_id != 0)
-	//	printk(">>>>>>%s:%d id=%d\n", __func__, __LINE__, vcpu->vcpu_id);
 		r = vcpu_run(vcpu);
 	}
 

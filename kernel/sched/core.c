@@ -2418,13 +2418,18 @@ int sched_fork(unsigned long clone_flags, struct task_struct *p)
 	 * Silence PROVE_RCU.
 	 */
 	raw_spin_lock_irqsave(&p->pi_lock, flags);
+
 	/*
 	 * We're setting the CPU for the first time, we don't migrate,
 	 * so use __set_task_cpu().
 	 */
 	__set_task_cpu(p, cpu);
+
+
+
 	if (p->sched_class->task_fork)
 		p->sched_class->task_fork(p);
+
 	raw_spin_unlock_irqrestore(&p->pi_lock, flags);
 
 #ifdef CONFIG_SCHED_INFO
@@ -6005,6 +6010,22 @@ void __init sched_init(void)
 
 	scheduler_running = 1;
 }
+
+void dump_root_cfs_rq(void)
+{
+	int i;
+
+	for (i = 0; i < nr_cpu_ids; i++)
+		printk(">>>>%s:%d i=%d cfs_rq=%lx\n", __func__, __LINE__, i, root_task_group.cfs_rq[i]);
+}
+
+
+void dump_current_cfs_rq_tg(void)
+{
+	printk(">>>>%s:%d cfs_rq=%lx tg=%lx\n", __func__, __LINE__,
+			current->se.cfs_rq, current->se.cfs_rq->tg);
+}
+
 
 #ifdef CONFIG_DEBUG_ATOMIC_SLEEP
 static inline int preempt_count_equals(int preempt_offset)

@@ -118,6 +118,9 @@ extern int unprivileged_userns_clone;
  */
 #define MAX_THREADS FUTEX_TID_MASK
 
+extern int my_task_test;
+
+
 /*
  * Protected counters by write_lock_irq(&tasklist_lock)
  */
@@ -554,17 +557,26 @@ static struct task_struct *dup_task_struct(struct task_struct *orig, int node)
 
 	if (node == NUMA_NO_NODE)
 		node = tsk_fork_get_node(orig);
+
 	tsk = alloc_task_struct_node(node);
 	if (!tsk)
 		return NULL;
+
+	if (my_task_test)
+		printk(">>>%s:%d tsk=%lx tg=%lx\n", __func__, __LINE__, tsk, tsk->sched_task_group);
 
 	stack = alloc_thread_stack_node(tsk, node);
 	if (!stack)
 		goto free_tsk;
 
+	if (my_task_test)
+		printk(">>>%s:%d tg=%lx\n", __func__, __LINE__, tsk->sched_task_group);
+
 	stack_vm_area = task_stack_vm_area(tsk);
 
 	err = arch_dup_task_struct(tsk, orig);
+	if (my_task_test)
+		printk(">>>%s:%d tg=%lx\n", __func__, __LINE__, tsk->sched_task_group);
 
 	/*
 	 * arch_dup_task_struct() clobbers the stack-related fields.  Make
@@ -593,9 +605,20 @@ static struct task_struct *dup_task_struct(struct task_struct *orig, int node)
 #endif
 
 	setup_thread_stack(tsk, orig);
+	if (my_task_test)
+		printk(">>>%s:%d tg=%lx\n", __func__, __LINE__, tsk->sched_task_group);
+
 	clear_user_return_notifier(tsk);
+	if (my_task_test)
+		printk(">>>%s:%d tg=%lx\n", __func__, __LINE__, tsk->sched_task_group);
+
 	clear_tsk_need_resched(tsk);
+	if (my_task_test)
+		printk(">>>%s:%d tg=%lx\n", __func__, __LINE__, tsk->sched_task_group);
+
 	set_task_stack_end_magic(tsk);
+	if (my_task_test)
+		printk(">>>%s:%d tg=%lx\n", __func__, __LINE__, tsk->sched_task_group);
 
 #ifdef CONFIG_CC_STACKPROTECTOR
 	tsk->stack_canary = get_random_canary();
@@ -616,6 +639,9 @@ static struct task_struct *dup_task_struct(struct task_struct *orig, int node)
 	account_kernel_stack(tsk, 1);
 
 	kcov_task_init(tsk);
+
+	if (my_task_test)
+		printk(">>>%s:%d tg=%lx\n", __func__, __LINE__, tsk->sched_task_group);
 
 #ifdef CONFIG_FAULT_INJECTION
 	tsk->fail_nth = 0;
@@ -1661,6 +1687,9 @@ static __latent_entropy struct task_struct *copy_process(
 	if (!p)
 		goto fork_out;
 
+	if (my_task_test)
+		printk(">>>%s:%d tg=%lx\n", __func__, __LINE__, p->sched_task_group);
+
 	/*
 	 * This _must_ happen before we call free_task(), i.e. before we jump
 	 * to any of the bad_fork_* labels. This is to avoid freeing
@@ -1693,6 +1722,9 @@ static __latent_entropy struct task_struct *copy_process(
 	retval = copy_creds(p, clone_flags);
 	if (retval < 0)
 		goto bad_fork_free;
+
+	if (my_task_test)
+		printk(">>>%s:%d tg=%lx\n", __func__, __LINE__, p->sched_task_group);
 
 	/*
 	 * If multiple threads are within copy_process(), then this check
@@ -1739,7 +1771,11 @@ static __latent_entropy struct task_struct *copy_process(
 
 	p->io_context = NULL;
 	p->audit_context = NULL;
+
+
 	cgroup_fork(p);
+
+
 #ifdef CONFIG_NUMA
 	p->mempolicy = mpol_dup(p->mempolicy);
 	if (IS_ERR(p->mempolicy)) {
@@ -1789,10 +1825,12 @@ static __latent_entropy struct task_struct *copy_process(
 	p->security = NULL;
 #endif
 
+
 	/* Perform scheduler related setup. Assign this task to a CPU. */
 	retval = sched_fork(clone_flags, p);
 	if (retval)
 		goto bad_fork_cleanup_policy;
+
 
 	retval = perf_event_init_task(p);
 	if (retval)
@@ -1997,8 +2035,11 @@ static __latent_entropy struct task_struct *copy_process(
 	write_unlock_irq(&tasklist_lock);
 
 	proc_fork_connector(p);
+
 	cgroup_post_fork(p);
+
 	cgroup_threadgroup_change_end(current);
+
 	perf_event_fork(p);
 
 	trace_task_newtask(p, clone_flags);

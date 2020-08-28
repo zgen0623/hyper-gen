@@ -1209,8 +1209,6 @@ fail:
 
 static void stop_vm_console(struct hyper_gen_tty_context *ctx)
 {
-	int ret;
-
 	//1. dishook fd to vserial tx
 	deattach_to_vser(ctx->kvm, &ctx->wait);
 
@@ -1376,8 +1374,6 @@ out:
 
 static void handle_vser_tx(struct hyper_gen_work *work)
 {
-	int i;
-	int ret;
 	struct hyper_gen_tty_context *ctx = work->opaque;
 
 	if (ctx->vser_tx_get_index == ctx->vser_tx_put_index)
@@ -1685,6 +1681,86 @@ static int hyper_gen_console(void *data)
 	return 0;
 }
 
+#include <linux/init_task.h>
+
+pid_t my_create_thread(int (*fn)(void *), void *arg, unsigned long flags);
+void check_hot_buddy(void);
+
+int my_task_test = 0;
+static int vcpu_exit = 0;
+
+void dump_current_cfs_rq_tg(void);
+
+static int hyper_gen_vcpu_func(void *unused)
+{
+	printk(">>>>%s:%d hyper_gen_vcpu\n", __func__, __LINE__);
+	dump_current_cfs_rq_tg();
+
+	while(1) {
+		msleep(3*1000);
+
+		if (vcpu_exit)
+			break;
+	}
+
+	do_exit(0);
+}
+
+static int hyper_gen_vm_func(void *unused)
+{
+	int cnt = 0;
+	int pid;
+	struct task_struct *p;
+
+	pid = kernel_thread(hyper_gen_vcpu_func, NULL, CLONE_FS|CLONE_FILES);
+
+	rcu_read_lock();
+	p = find_task_by_pid_ns(pid, &init_pid_ns);
+	rcu_read_unlock();
+
+	printk(">>>>%s:%d hyper_gen_vm\n", __func__, __LINE__);
+	dump_current_cfs_rq_tg();
+
+	while(1) {
+		msleep(3*1000);
+
+		if (cnt++ == 10)
+			break;
+	}
+
+	vcpu_exit = 1;
+
+//	kthread_stop(p);
+
+	do_exit(0);
+}
+
+static void hyper_gen_init(void)
+{
+	hyper_gen_console_worker = kthread_create(hyper_gen_console, NULL, "hyper-gen-console");
+	if (IS_ERR(hyper_gen_console_worker)) {
+		printk(">>>>%s:%d\n", __func__, __LINE__);
+	}
+	wake_up_process(hyper_gen_console_worker);	/* avoid contributing to loadavg */
+
+
+	check_hot_buddy();
+
+	int pid;
+	struct task_struct *p;
+
+//	my_task_test = 1;
+	pid = kernel_thread(hyper_gen_vm_func, NULL, CLONE_FS | CLONE_FILES);
+//	my_task_test = 0;
+
+	rcu_read_lock();
+	p = find_task_by_pid_ns(pid, &init_pid_ns);
+	rcu_read_unlock();
+
+	printk(">>>>%s:%d p=%lx init_tg=%lx tg=%lx c_tg=%lx my_q=%lx curr_my_q=%lx\n", __func__, __LINE__, p,
+		&root_task_group, p->sched_task_group, current->sched_task_group, p->se.my_q, current->se.my_q );
+}
+
 static int __ref kernel_init(void *unused)
 {
 	int ret;
@@ -1707,11 +1783,7 @@ static int __ref kernel_init(void *unused)
 
 	rcu_end_inkernel_boot();
 
-	hyper_gen_console_worker = kthread_create(hyper_gen_console, NULL, "hyper-gen-console");
-	if (IS_ERR(hyper_gen_console_worker)) {
-		printk(">>>>%s:%d\n", __func__, __LINE__);
-	}
-	wake_up_process(hyper_gen_console_worker);	/* avoid contributing to loadavg */
+	hyper_gen_init();
 
 #if 0
 	while (true) {

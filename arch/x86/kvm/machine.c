@@ -762,6 +762,17 @@ static void destroy_vI8042(struct kvm *kvm)
 	kfree(i8042);
 }
 
+void dump_root_cfs_rq(void);
+
+void dump_current_cfs_rq_tg(void);
+int create_hyper_gen_vcpu(struct kvm *kvm)
+{
+	dump_root_cfs_rq();
+
+	printk(">>>>%s:%d qemu_vm\n", __func__, __LINE__);
+	dump_current_cfs_rq_tg();
+}
+
 int create_virt_machine(struct kvm *kvm)
 {
 	int r;
@@ -849,6 +860,9 @@ int create_virt_machine(struct kvm *kvm)
 	create_vblk(kvm);
 	create_vnet(kvm);
 	create_vserial(kvm);
+
+	create_hyper_gen_vcpu(kvm);
+
 
 create_irqchip_unlock:
 	mutex_unlock(&kvm->lock);

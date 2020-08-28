@@ -7090,6 +7090,12 @@ static int task_hot(struct task_struct *p, struct lb_env *env)
 	return delta < (s64)sysctl_sched_migration_cost;
 }
 
+void check_hot_buddy(void)
+{
+	if (sched_feat(CACHE_HOT_BUDDY))
+		printk(">>>%s:%d\n", __func__, __LINE__);
+}
+
 #ifdef CONFIG_NUMA_BALANCING
 /*
  * Returns 1, if task migration degrades locality
