@@ -1372,8 +1372,6 @@ static inline uint64_t x86_cpu_xsave_components(CPUX86State *env)
 
 int kvm_vcpu_ioctl_x86_setup_mce(struct kvm_vcpu *vcpu,	u64 mcg_cap);
 
-void init_vm_possible_cpus(struct kvm *kvm);
-
 int kvm_get_supported_msrs(void);
 
 typedef uint32_t apic_id_t;

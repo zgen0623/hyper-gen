@@ -2335,9 +2335,8 @@ void destroy_vnet(struct kvm *kvm)
 	//1. destroy pci
 	//2. destroy vdev
 	//3. destroy vs
-    do_pci_unregister_device(pci_dev);
-
     vhost_net_unrealize(vdev);
+    do_pci_unregister_device(pci_dev);
 
 	kfree(vn);
 }

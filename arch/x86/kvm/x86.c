@@ -7185,8 +7185,6 @@ static int vcpu_enter_guest(struct kvm_vcpu *vcpu)
 
 	bool req_immediate_exit = false;
 
-//	printk(">>>>>>%s:%d id=%d\n", __func__, __LINE__, vcpu->vcpu_id);
-
 	if (kvm_request_pending(vcpu)) {
 		if (kvm_check_request(KVM_REQ_MMU_RELOAD, vcpu))
 			kvm_mmu_unload(vcpu);
@@ -7400,8 +7398,6 @@ static int vcpu_enter_guest(struct kvm_vcpu *vcpu)
 
 
 
-
-
 	/*
 	 * Do this here before restoring debug registers on the host.  And
 	 * since we do this before handling the vmexit, a DR access vmexit
@@ -7457,8 +7453,13 @@ static int vcpu_enter_guest(struct kvm_vcpu *vcpu)
 	if (vcpu->arch.apic_attention)
 		kvm_lapic_sync_from_vapic(vcpu);
 
+
 	vcpu->arch.gpa_available = false;
+
+		vcpu->vcpu_debug_mark |= 1<<10;
 	r = kvm_x86_ops->handle_exit(vcpu);
+		vcpu->vcpu_debug_mark |= 1<<11;
+
 	return r;
 
 cancel_injection:
@@ -7473,12 +7474,16 @@ static inline int vcpu_block(struct kvm *kvm, struct kvm_vcpu *vcpu)
 {
 	if (!kvm_arch_vcpu_runnable(vcpu) &&
 	    (!kvm_x86_ops->pre_block || kvm_x86_ops->pre_block(vcpu) == 0)) {
+
+		vcpu->vcpu_debug_mark |= 1<<12;
 		srcu_read_unlock(&kvm->srcu, vcpu->srcu_idx);
 		kvm_vcpu_block(vcpu);
 		vcpu->srcu_idx = srcu_read_lock(&kvm->srcu);
+		vcpu->vcpu_debug_mark |= 1<<13;
 
 		if (kvm_x86_ops->post_block)
 			kvm_x86_ops->post_block(vcpu);
+		vcpu->vcpu_debug_mark |= 1<<14;
 
 		if (!kvm_check_request(KVM_REQ_UNHALT, vcpu))
 			return 1;
@@ -7520,19 +7525,31 @@ static int vcpu_run(struct kvm_vcpu *vcpu)
 	vcpu->arch.l1tf_flush_l1d = true;
 
 	for (;;) {
+		vcpu->vcpu_debug_mark = 0;
+
 		if (kvm_vcpu_running(vcpu)) {
+			vcpu->vcpu_debug_mark |= 1<<0;
 			r = vcpu_enter_guest(vcpu);
 		} else {
+			vcpu->vcpu_debug_mark |= 1<<1;
 			r = vcpu_block(kvm, vcpu);
 		}
 
-		if (r <= 0)
+		vcpu->vcpu_debug_mark |= 1<<2;
+
+		if (r <= 0 || vcpu->run->immediate_exit)
 			break;
 
-		kvm_clear_request(KVM_REQ_PENDING_TIMER, vcpu);
-		if (kvm_cpu_has_pending_timer(vcpu))
-			kvm_inject_pending_timer_irqs(vcpu);
+		vcpu->vcpu_debug_mark |= 1<<3;
 
+		kvm_clear_request(KVM_REQ_PENDING_TIMER, vcpu);
+		if (kvm_cpu_has_pending_timer(vcpu)) {
+			vcpu->vcpu_debug_mark |= 1<<4;
+			kvm_inject_pending_timer_irqs(vcpu);
+		}
+
+	//No DM in hyper-gen
+#if 0
 		if (dm_request_for_irq_injection(vcpu) &&
 			kvm_vcpu_ready_for_interrupt_injection(vcpu)) {
 			r = 0;
@@ -7540,20 +7557,29 @@ static int vcpu_run(struct kvm_vcpu *vcpu)
 			++vcpu->stat.request_irq_exits;
 			break;
 		}
+#endif
 
 		kvm_check_async_pf_completion(vcpu);
 
+		vcpu->vcpu_debug_mark |= 1<<5;
+
 		if (signal_pending(current)) {
+			vcpu->vcpu_debug_mark |= 1<<6;
 			r = -EINTR;
 			vcpu->run->exit_reason = KVM_EXIT_INTR;
 			++vcpu->stat.signal_exits;
 			break;
 		}
+		vcpu->vcpu_debug_mark |= 1<<7;
+
 		if (need_resched()) {
+			vcpu->vcpu_debug_mark |= 1<<8;
 			srcu_read_unlock(&kvm->srcu, vcpu->srcu_idx);
 			cond_resched();
 			vcpu->srcu_idx = srcu_read_lock(&kvm->srcu);
 		}
+
+		vcpu->vcpu_debug_mark |= 1<<9;
 	}
 
 	srcu_read_unlock(&kvm->srcu, vcpu->srcu_idx);
@@ -7676,6 +7702,7 @@ int kvm_arch_vcpu_ioctl_run(struct kvm_vcpu *vcpu, struct kvm_run *kvm_run)
 			goto out;
 	} else
 		WARN_ON(vcpu->arch.pio.count || vcpu->mmio_needed);
+
 
 	if (kvm_run->immediate_exit)
 		r = -EINTR;
@@ -9334,6 +9361,19 @@ int kvm_arch_update_irqfd_routing(struct kvm *kvm, unsigned int host_irq,
 
 	return kvm_x86_ops->update_pi_irte(kvm, host_irq, guest_irq, set);
 }
+
+bool kvm_arch_stop_on_emulation_error(struct cpu_state *cpu)
+{   
+	struct kvm_segment cs;
+	uint64_t cr0;
+
+	kvm_get_segment(cpu->vcpu, &cs, VCPU_SREG_CS);
+	cr0 = kvm_read_cr0(cpu->vcpu);
+
+    //just need to sync cr0 & csl
+    return !(cr0 & CR0_PE_MASK) || ((cs.selector  & 3) != 3);
+}
+
 
 bool kvm_vector_hashing_enabled(void)
 {

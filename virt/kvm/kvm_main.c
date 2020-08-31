@@ -181,6 +181,7 @@ int vcpu_load(struct kvm_vcpu *vcpu)
 
 	if (mutex_lock_killable(&vcpu->mutex))
 		return -EINTR;
+
 	cpu = get_cpu();
 	preempt_notifier_register(&vcpu->preempt_notifier);
 	kvm_arch_vcpu_load(vcpu, cpu);
@@ -641,7 +642,7 @@ static struct kvm *kvm_create_vm(unsigned long type)
 	struct kvm *kvm = kvm_arch_alloc_vm();
 
 	if (!kvm)
-		return ERR_PTR(-ENOMEM);
+		return NULL;
 
 	kvm->id = kvm_id++;
 
@@ -730,7 +731,7 @@ out_err_no_disable:
 		kvm_free_memslots(kvm, __kvm_memslots(kvm, i));
 	kvm_arch_free_vm(kvm);
 	mmdrop(current->mm);
-	return ERR_PTR(r);
+	return NULL;
 }
 
 struct kvm *find_kvm_by_id(uint64_t kvm_id)
@@ -830,11 +831,14 @@ static int kvm_vm_release(struct inode *inode, struct file *filp)
 	struct kvm *kvm = filp->private_data;
 
 
-	kvm_irqfd_release(kvm);
+//	kvm_irqfd_release(kvm);
 
+#if 0
 	int r = refcount_read(&kvm->users_count);
 	printk(">>>>>%s:%d put reg=%d\n", __func__, __LINE__,r);
+
 	kvm_put_kvm(kvm);
+#endif
 	return 0;
 }
 
@@ -2211,6 +2215,7 @@ static int __kvm_gfn_to_hva_cache_init(struct kvm_memslots *slots,
 	ghc->len = len;
 	ghc->memslot = __gfn_to_memslot(slots, start_gfn);
 	ghc->hva = gfn_to_hva_many(ghc->memslot, start_gfn, NULL);
+
 	if (!kvm_is_error_hva(ghc->hva) && nr_pages_needed <= 1) {
 		ghc->hva += offset;
 	} else {
@@ -2428,7 +2433,11 @@ static int kvm_vcpu_check_block(struct kvm_vcpu *vcpu)
 	}
 	if (kvm_cpu_has_pending_timer(vcpu))
 		return -EINTR;
+
 	if (signal_pending(current))
+		return -EINTR;
+
+	if (vcpu->thread_state->stop)
 		return -EINTR;
 
 	return 0;
@@ -2464,7 +2473,9 @@ void kvm_vcpu_block(struct kvm_vcpu *vcpu)
 		} while (single_task_running() && ktime_before(cur, stop));
 	}
 
+		vcpu->vcpu_debug_mark |= 1<<15;
 	kvm_arch_vcpu_blocking(vcpu);
+		vcpu->vcpu_debug_mark |= 1<<16;
 
 	for (;;) {
 		prepare_to_swait(&vcpu->wq, &wait, TASK_INTERRUPTIBLE);
@@ -2475,6 +2486,7 @@ void kvm_vcpu_block(struct kvm_vcpu *vcpu)
 		waited = true;
 		schedule();
 	}
+		vcpu->vcpu_debug_mark |= 1<<17;
 
 	finish_swait(&vcpu->wq, &wait);
 	cur = ktime_get();
@@ -2509,6 +2521,7 @@ bool kvm_vcpu_wake_up(struct kvm_vcpu *vcpu)
 
 	wqp = kvm_arch_vcpu_wq(vcpu);
 	if (swq_has_sleeper(wqp)) {
+
 		swake_up(wqp);
 		++vcpu->stat.halt_wakeup;
 		return true;
@@ -2852,6 +2865,75 @@ vcpu_decrement:
 	return r;
 }
 
+static struct kvm_vcpu *hyper_gen_create_vcpu(struct kvm *kvm, u32 id)
+{
+	int r;
+	struct kvm_vcpu *vcpu;
+
+	if (id >= KVM_MAX_VCPU_ID)
+		return -EINVAL;
+
+	mutex_lock(&kvm->lock);
+	if (kvm->created_vcpus == KVM_MAX_VCPUS) {
+		mutex_unlock(&kvm->lock);
+		return -EINVAL;
+	}
+
+	kvm->created_vcpus++;
+	mutex_unlock(&kvm->lock);
+
+
+	vcpu = kvm_arch_vcpu_create(kvm, id);
+	if (IS_ERR(vcpu)) {
+		printk(">>>>>%s:%d\n", __func__, __LINE__);
+		r = PTR_ERR(vcpu);
+		goto vcpu_decrement;
+	}
+
+	preempt_notifier_init(&vcpu->preempt_notifier, &kvm_preempt_ops);
+
+	r = kvm_arch_vcpu_setup(vcpu);
+	if (r) {
+		printk(">>>>>%s:%d\n", __func__, __LINE__);
+		goto vcpu_destroy;
+	}
+
+
+	mutex_lock(&kvm->lock);
+	if (kvm_get_vcpu_by_id(kvm, id)) {
+		printk(">>>>>%s:%d\n", __func__, __LINE__);
+		r = -EEXIST;
+		goto unlock_vcpu_destroy;
+	}
+
+	BUG_ON(kvm->vcpus[atomic_read(&kvm->online_vcpus)]);
+
+	/* Now it's all set up, let userspace reach it */
+	kvm_get_kvm(kvm);
+
+	kvm->vcpus[atomic_read(&kvm->online_vcpus)] = vcpu;
+
+	smp_wmb();
+	atomic_inc(&kvm->online_vcpus);
+
+	mutex_unlock(&kvm->lock);
+
+	kvm_arch_vcpu_postcreate(vcpu);
+
+
+	return vcpu;
+
+unlock_vcpu_destroy:
+	mutex_unlock(&kvm->lock);
+vcpu_destroy:
+	kvm_arch_vcpu_destroy(vcpu);
+vcpu_decrement:
+	mutex_lock(&kvm->lock);
+	kvm->created_vcpus--;
+	mutex_unlock(&kvm->lock);
+	return NULL;
+}
+
 static int kvm_vcpu_ioctl_set_sigmask(struct kvm_vcpu *vcpu, sigset_t *sigset)
 {
 	if (sigset) {
@@ -3179,7 +3261,6 @@ static int kvm_device_release(struct inode *inode, struct file *filp)
 	struct kvm_device *dev = filp->private_data;
 	struct kvm *kvm = dev->kvm;
 
-	printk(">>>>>%s:%d put \n", __func__, __LINE__);
 	kvm_put_kvm(kvm);
 	return 0;
 }
@@ -3265,11 +3346,9 @@ static int kvm_ioctl_create_device(struct kvm *kvm,
 	if (ops->init)
 		ops->init(dev);
 
-	printk(">>>>>%s:%d get \n", __func__, __LINE__);
 	kvm_get_kvm(kvm);
 	ret = anon_inode_getfd(ops->name, &kvm_device_fops, dev, O_RDWR | O_CLOEXEC);
 	if (ret < 0) {
-		printk(">>>>>%s:%d put \n", __func__, __LINE__);
 		kvm_put_kvm(kvm);
 		mutex_lock(&kvm->lock);
 		list_del(&dev->vm_node);
@@ -3584,14 +3663,12 @@ static int kvm_dev_ioctl_create_vm(unsigned long type)
 		return PTR_ERR(kvm);
 	r = get_unused_fd_flags(O_CLOEXEC);
 	if (r < 0) {
-		printk(">>>>>%s:%d put \n", __func__, __LINE__);
 		kvm_put_kvm(kvm);
 		return r;
 	}
 	file = anon_inode_getfile("kvm-vm", &kvm_vm_fops, kvm, O_RDWR);
 	if (IS_ERR(file)) {
 		put_unused_fd(r);
-		printk(">>>>>%s:%d put \n", __func__, __LINE__);
 		kvm_put_kvm(kvm);
 		return PTR_ERR(file);
 	}
@@ -3599,6 +3676,464 @@ static int kvm_dev_ioctl_create_vm(unsigned long type)
 	fd_install(r, file);
 	return r;
 }
+
+
+
+#include <hyper_gen/hyper_gen_work.h>
+
+static bool cpu_thread_is_idle(struct cpu_state *cpu)
+{
+    if (cpu->stop)
+        return false;
+
+    if (cpu->stopped)
+        return true;
+
+    return false;
+}
+
+static int hyper_gen_vcpu_run(struct kvm_vcpu *vcpu)
+{
+	int r;
+	struct pid *oldpid;
+
+	r = vcpu_load(vcpu);
+	if (r)
+		return r;
+
+	r = -EINVAL;
+	oldpid = rcu_access_pointer(vcpu->pid);
+	if (unlikely(oldpid != current->pids[PIDTYPE_PID].pid)) {
+		/* The thread running this VCPU changed. */
+		struct pid *newpid = get_task_pid(current, PIDTYPE_PID);
+
+		rcu_assign_pointer(vcpu->pid, newpid);
+		if (oldpid)
+			synchronize_rcu();
+		put_pid(oldpid);
+	}
+
+	atomic_inc(&vcpu->kvm->running_vcpus);
+
+	r = kvm_arch_vcpu_ioctl_run(vcpu, vcpu->run);
+
+	vcpu_put(vcpu);
+
+	return r;
+}
+
+                
+#define EXCP_INTERRUPT  0x10000 /* async interruption */
+#define EXCP_HLT        0x10001 /* hlt instruction reached */
+#define EXCP_DEBUG      0x10002 /* cpu stopped after a breakpoint or singlestep */
+#define EXCP_HALTED     0x10003 /* cpu is halted (waiting for external event) */
+#define EXCP_YIELD      0x10004 /* cpu wants to yield timeslice to another */
+#define EXCP_ATOMIC     0x10005 /* stop-the-world and emulate atomic */
+
+static void address_space_rw(uint64_t addr,
+                             uint8_t *buf, uint64_t len, bool is_write)
+{                        
+    if (!is_write) {
+        if (len == 1) {
+            *buf = ~0;
+        } else if (len == 2) {
+            *(uint16_t*)buf = ~0;
+        } else if (len == 4) {
+            *(uint32_t*)buf = ~0;
+        } else if (len == 8) {
+            *(uint64_t*)buf = ~0;
+        }
+    }
+}
+
+static void kvm_handle_io(uint16_t port, void *data, int direction,
+                          int size, uint32_t count)
+{
+    int i;
+    uint8_t *ptr = data;
+
+    for (i = 0; i < count; i++) {
+        address_space_rw(port,
+                         ptr, size,
+                         direction == KVM_EXIT_IO_OUT);
+        ptr += size;
+    }
+}
+
+bool kvm_arch_stop_on_emulation_error(struct cpu_state *cpu);
+
+static int kvm_handle_internal_error(struct cpu_state *cpu, struct kvm_run *run)
+{
+    int i;
+
+    printk(">>>>%s:%d KVM internal error. Suberror: %d\n",
+            __func__, __LINE__, run->internal.suberror);
+
+    for (i = 0; i < run->internal.ndata; ++i)
+        printk(">>>extra data[%d]: %lx\n",
+                    i, (uint64_t)run->internal.data[i]);
+
+    if (run->internal.suberror == KVM_INTERNAL_ERROR_EMULATION) {
+        printk(">>>%s:%d emulation failure\n", __func__, __LINE__);
+        if (!kvm_arch_stop_on_emulation_error(cpu))
+            return EXCP_INTERRUPT;
+    }
+
+    return -1;
+}
+#define VMX_INVALID_GUEST_STATE 0x80000021
+
+static int kvm_arch_handle_exit(struct cpu_state *cs, struct kvm_run *run)
+{
+    uint64_t code;
+    int ret;
+
+    switch (run->exit_reason) {
+    case KVM_EXIT_FAIL_ENTRY:
+        code = run->fail_entry.hardware_entry_failure_reason;
+        printk(">>>%s:%d KVM: entry failed, hardware error 0x%lx\n",
+                __func__, __LINE__, code);
+        if (code == VMX_INVALID_GUEST_STATE) {
+            printk("\nIf you're running a guest on an Intel machine without "
+                        "unrestricted mode\n"
+                    "support, the failure can be most likely due to the guest "
+                        "entering an invalid\n"
+                    "state for Intel VT. For example, the guest maybe running "
+                        "in big real mode\n"
+                    "which is not supported on less recent Intel processors."
+                        "\n\n");
+        }
+        ret = -1;
+        break;
+    case KVM_EXIT_EXCEPTION:
+        printk(">>>%s:%d KVM: exception %d exit (error code 0x%x)\n",
+				__func__, __LINE__,
+                run->ex.exception, run->ex.error_code);
+        ret = -1;
+        break;
+    case KVM_EXIT_DEBUG:
+        ret = 0;
+        break;
+    default:
+        printk(">>>%s:%d KVM: unknown exit reason %d\n",
+			__func__, __LINE__, run->exit_reason);
+        ret = -1;
+        break;
+    }
+
+    return ret;
+}
+
+static int hyper_gen_kvm_dev_ioctl_destroy_vm(unsigned long vm_id);
+
+static void kvm_cpu_exec(struct cpu_state *cpu)
+{
+    struct kvm_run *run = cpu->run;
+    int ret, run_ret;
+
+    do {
+        /* Read cpu->exit_request before KVM_RUN reads run->immediate_exit.
+         * Matching barrier in kvm_eat_signals.
+         */
+        smp_rmb();
+
+		run_ret = hyper_gen_vcpu_run(cpu->vcpu);
+
+        if (run_ret < 0) {
+            if (run_ret == -EINTR || run_ret == -EAGAIN) {
+				if (!cpu->stop) {
+                	run->immediate_exit = 0;
+                	smp_wmb();
+                	ret = EXCP_INTERRUPT;
+				} else
+					ret = -1;
+
+                break;
+            }
+            printk(">>>%s:%d error: kvm run failed\n",
+           		__func__, __LINE__);
+            ret = -1;
+            break;
+        }
+
+        switch (run->exit_reason) {
+        case KVM_EXIT_IO:
+            /* Called outside BQL */
+            kvm_handle_io(run->io.port,
+#ifdef CONFIG_X86
+						cpu->vcpu->arch.pio_data,
+#else
+                        (uint8_t *)run + run->io.data_offset,
+#endif
+                          run->io.direction,
+                          run->io.size,
+                          run->io.count);
+            ret = 0;
+            break;
+        case KVM_EXIT_MMIO:
+            /* Called outside BQL */
+            address_space_rw(run->mmio.phys_addr,
+                             run->mmio.data,
+                             run->mmio.len,
+                             run->mmio.is_write);
+            ret = 0;
+            break;
+        case KVM_EXIT_SHUTDOWN:
+            ret = -1;
+            break;
+        case KVM_EXIT_UNKNOWN:
+            printk(">>>%s:%d KVM: unknown exit, hardware reason %lx\n",
+                    __func__, __LINE__, (uint64_t)run->hw.hardware_exit_reason);
+            ret = -1;
+            break;
+        case KVM_EXIT_INTERNAL_ERROR:
+            ret = kvm_handle_internal_error(cpu, run);
+            break;
+        case KVM_EXIT_SYSTEM_EVENT:
+            switch (run->system_event.type) {
+            case KVM_SYSTEM_EVENT_SHUTDOWN:
+                ret = -1;
+                break;
+            case KVM_SYSTEM_EVENT_RESET:
+                ret = -1;
+                break;
+            case KVM_SYSTEM_EVENT_CRASH:
+                ret = -1;
+                break;
+            default:
+                ret = kvm_arch_handle_exit(cpu, run);
+                break;
+            }
+            break;
+        default:
+            ret = kvm_arch_handle_exit(cpu, run);
+            break;
+        }
+    } while (ret == 0);
+
+    if (ret < 0) {
+        cpu->stop = true;
+		hyper_gen_kvm_dev_ioctl_destroy_vm(cpu->vcpu->kvm->id);
+    }
+
+    return;
+}
+
+static int hyper_gen_vcpu_fn(void *opaque)
+{
+	struct cpu_state *cpu = opaque;
+	struct kvm *kvm = cpu->kvm;
+	struct kvm_vcpu *vcpu;
+
+	//1. create vcpu
+	vcpu = hyper_gen_create_vcpu(kvm, cpu->apic_id);
+	cpu->vcpu = vcpu;
+	cpu->run = vcpu->run;
+#ifdef CONFIG_X86
+	cpu->pio_data = vcpu->arch.pio_data;
+#endif
+	vcpu->thread_state = cpu;
+
+	//2. wake up launcher
+	cpu->created = true;
+	wake_up(&kvm->wait_vcpu_thread_wq);
+
+	if (!vcpu)
+		do_exit(0);
+
+	//3. into vmx loop
+	while (1) {
+        if (!(cpu->stop || cpu->stopped))
+            kvm_cpu_exec(cpu);
+
+		wait_event(cpu->halt,
+				   !cpu_thread_is_idle(cpu));
+
+    	if (cpu->stop) {
+        	cpu->stop = false;
+        	cpu->stopped = true;
+    		smp_wmb();
+			break;
+    	}
+	}
+
+	//4. vcpu thread exit
+	printk(">>>%s:%d cpu=%d\n", __func__, __LINE__, cpu->apic_id);
+	kvm_put_kvm(kvm);
+	wake_up(&kvm->wait_vcpu_thread_wq);
+	do_exit(0);
+}
+
+
+static void hyper_gen_create_vm(struct hyper_gen_work *work)
+{
+	int i;
+	int ret = 0;
+	struct kvm *kvm;
+	struct kvm_vcpu *vcpu;
+	CPUArchIdList *list;
+	struct hyper_gen_vm_work *vm_work =
+		container_of(work, struct hyper_gen_vm_work, work);
+
+	kvm = kvm_create_vm(0);
+	if (!kvm) {
+		printk(">>>%s:%d\n", __func__,__LINE__);
+		vm_work->ret = -1;
+		goto out;
+	}
+
+	//create thread for each vcpu
+	list = kvm->possible_cpus;
+	for (i = 0; i < list->len; i++) {
+		struct cpu_state *cpu =
+			kzalloc(sizeof(struct cpu_state), GFP_KERNEL);
+		if (!cpu) {
+			printk(">>>%s:%d\n",__func__, __LINE__);
+			continue;
+		}
+
+		cpu->created = false;
+		cpu->stopped = true;
+		cpu->stop = false;
+		cpu->kvm = kvm;
+		cpu->apic_id = list->cpus[i].arch_id;
+		init_waitqueue_head(&cpu->halt);
+
+		kernel_thread(hyper_gen_vcpu_fn, cpu, CLONE_FS | CLONE_FILES);
+
+		wait_event(kvm->wait_vcpu_thread_wq, cpu->created);
+	}
+
+	//resume all the vcpus
+	kvm_for_each_vcpu(i, vcpu, kvm) {
+		struct cpu_state *cpu = vcpu->thread_state;
+        cpu->stop = false;
+        cpu->stopped = false;
+    	wake_up(&cpu->halt);
+	}
+
+	vm_work->ret = 0;
+out:
+	atomic_set(&vm_work->done, 1);
+	wake_up(&vm_work->wq);
+}
+
+static int hyper_gen_kvm_dev_ioctl_create_vm(void)
+{
+	int r = 0;
+	struct hyper_gen_vm_work *vm_work =
+		kzalloc(sizeof(struct hyper_gen_vm_work), GFP_KERNEL);
+
+	vm_work->work.flags = 0;
+	vm_work->work.fn = hyper_gen_create_vm;
+	vm_work->work.opaque = (void*)&vm_work->work;
+	atomic_set(&vm_work->done, 0);
+	init_waitqueue_head(&vm_work->wq);
+
+	hyper_gen_commit_work(&vm_work->work);
+
+	wait_event(vm_work->wq,
+			   !!atomic_read(&vm_work->done));
+
+	r = vm_work->ret;
+
+	kfree(vm_work);
+
+	return r;
+}
+
+static void kick_vcpu_stop(struct cpu_state *cpu)
+{
+    wake_up(&cpu->halt);
+    cpu->run->immediate_exit = 1;
+    smp_wmb();
+	kvm_vcpu_kick(cpu->vcpu);
+}
+
+static bool all_threads_paused(struct kvm *kvm)
+{
+	int i;
+	struct kvm_vcpu *vcpu;
+
+	kvm_for_each_vcpu(i, vcpu, kvm) {
+		struct cpu_state *cpu = vcpu->thread_state;
+
+		if (cpu->stopped)
+			continue;
+
+		kick_vcpu_stop(cpu);
+	}
+
+	kvm_for_each_vcpu(i, vcpu, kvm) {
+		struct cpu_state *cpu = vcpu->thread_state;
+
+        if (!cpu->stopped) {
+//			printk(">>>%s:%d %d %llx\n", __func__, __LINE__,
+//				cpu->apic_id, cpu->vcpu->vcpu_debug_mark);
+            return false;
+		}
+	}
+
+    return true;
+}
+
+static void hyper_gen_destroy_vm(struct hyper_gen_work *work)
+{
+	int i;
+	int ret = 0;
+	long wait_ret;
+	struct kvm *kvm;
+	struct kvm_vcpu *vcpu;
+	struct hyper_gen_vm_work *vm_work =
+		container_of(work, struct hyper_gen_vm_work, work);
+
+	kvm = vm_work->arg;
+
+	kvm_for_each_vcpu(i, vcpu, kvm) {
+		struct cpu_state *cpu = vcpu->thread_state;
+		if (cpu->stopped)
+			continue;
+
+		cpu->stop = true;
+		kick_vcpu_stop(cpu);
+	}
+
+	do {
+		wait_ret = wait_event_timeout(kvm->wait_vcpu_thread_wq,
+			   all_threads_paused(kvm), 3*HZ);
+	} while(wait_ret == 0);
+
+	int r = refcount_read(&kvm->users_count);
+	printk(">>>>>%s:%d put reg=%d\n", __func__, __LINE__,r);
+
+	kvm_put_kvm(kvm);
+}
+
+static int hyper_gen_kvm_dev_ioctl_destroy_vm(unsigned long vm_id)
+{
+	int r = 0;
+	struct kvm *kvm;
+	struct hyper_gen_vm_work *vm_work;
+
+	kvm = find_kvm_by_id(vm_id);
+	if (!kvm) {
+		printk(">>>%s:%d\n", __func__, __LINE__);
+		return 0;
+	}
+	vm_work = &kvm->vm_destroy_work;
+
+	if (test_and_set_bit(WORK_STARTED, &vm_work->work.flags))
+		return 0;
+
+	vm_work->work.fn = hyper_gen_destroy_vm;
+	vm_work->work.opaque = (void*)&vm_work->work;
+	vm_work->arg = (void*)kvm;
+
+	hyper_gen_commit_work(&vm_work->work);
+
+	return r;
+}
+
 
 static long kvm_dev_ioctl(struct file *filp,
 			  unsigned int ioctl, unsigned long arg)
@@ -3612,7 +4147,8 @@ static long kvm_dev_ioctl(struct file *filp,
 		r = KVM_API_VERSION;
 		break;
 	case KVM_CREATE_VM:
-		r = kvm_dev_ioctl_create_vm(arg);
+//		r = kvm_dev_ioctl_create_vm(arg);
+		r = hyper_gen_kvm_dev_ioctl_create_vm();
 		break;
 	case KVM_CHECK_EXTENSION:
 		r = kvm_vm_ioctl_check_extension_generic(NULL, arg);

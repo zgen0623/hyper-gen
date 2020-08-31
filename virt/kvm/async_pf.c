@@ -110,7 +110,6 @@ static void async_pf_execute(struct work_struct *work)
 		swake_up(&vcpu->wq);
 
 	mmput(mm);
-	printk(">>>>>%s:%d put \n", __func__, __LINE__);
 	kvm_put_kvm(vcpu->kvm);
 }
 

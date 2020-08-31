@@ -2189,14 +2189,18 @@ void *my_vmalloc(unsigned long size)
 	area = __get_vm_area_node(size, PMD_SIZE, VM_ALLOC | VM_UNINITIALIZED |
 			VM_NO_GUARD , VMALLOC_START, VMALLOC_END, NUMA_NO_NODE, GFP_KERNEL,
 				__builtin_return_address(0));
-	if (!area)
+	if (!area) {
+		printk(">>>%s:%d\n", __func__,__LINE__);
 		goto fail;
+	}
 
 	area->page_size = PMD_SIZE;
 
 	addr = my_vmalloc_area_node(area, GFP_KERNEL);
-	if (!addr)
-		return NULL;
+	if (!addr) {
+		printk(">>>%s:%d\n", __func__,__LINE__);
+		goto fail;
+	}
 
 	/*
 	 * In this function, newly allocated vm_struct has VM_UNINITIALIZED

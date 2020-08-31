@@ -36,6 +36,7 @@
 #include <linux/kvm_types.h>
 
 #include <asm/kvm_host.h>
+#include <hyper_gen/hyper_gen_work.h>
 
 #ifndef KVM_MAX_VCPU_ID
 #define KVM_MAX_VCPU_ID KVM_MAX_VCPUS
@@ -257,6 +258,36 @@ struct kvm_pci_bar_reg_info {
 	uint64_t size;
 };
 
+struct cpu_state {
+//    struct QemuThread *thread;
+	wait_queue_head_t halt;
+//    atomic_t created;
+    bool created;
+    bool stop;
+    bool stopped;
+
+    
+//    QTAILQ_ENTRY(CPUState) node;
+
+    struct kvm_vcpu *vcpu;
+    struct kvm *kvm;
+    struct kvm_run *run;
+#ifdef CONFIG_X86
+	void *pio_data;
+#endif
+
+    /* TODO Move common fields from CPUArchState here. */
+    int cpu_index;
+
+    /* shared by kvm, hax and hvf */
+  //  bool vcpu_dirty;
+
+
+    uint32_t apic_id;
+};
+
+
+
 
 struct kvm_vcpu {
 	struct kvm *kvm;
@@ -319,6 +350,9 @@ struct kvm_vcpu {
 	struct kvm_vcpu_arch arch;
 	struct dentry *debugfs_dentry;
 	struct list_head pci_bar_update_list;
+
+	struct cpu_state *thread_state;
+	uint64_t vcpu_debug_mark;
 };
 
 static inline int kvm_vcpu_exiting_guest_mode(struct kvm_vcpu *vcpu)
@@ -478,6 +512,13 @@ struct gen_shm {
 	struct vserial_info vser_info;
 };
 
+struct hyper_gen_vm_work {
+	struct hyper_gen_work work;
+	wait_queue_head_t wq;
+	atomic_t done;
+	int ret;
+	void *arg;
+};
 
 struct kvm {
 	spinlock_t mmu_lock;
@@ -549,6 +590,9 @@ struct kvm {
 	long unsigned *used_gsi_bitmap;
 	int ent_allocated;
 	struct list_head evt_list;
+
+	wait_queue_head_t wait_vcpu_thread_wq;
+	struct hyper_gen_vm_work vm_destroy_work;
 
 #if 0
 	struct gen_shm *gen_shm;

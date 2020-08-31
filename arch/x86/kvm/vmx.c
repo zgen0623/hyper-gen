@@ -10074,6 +10074,7 @@ static void vmx_free_vcpu(struct kvm_vcpu *vcpu)
 
 	kvm_vcpu_uninit(vcpu);
 
+	kfree(vcpu->thread_state);
 	kmem_cache_free(kvm_vcpu_cache, vmx);
 }
 

@@ -431,9 +431,9 @@ void destroy_vblk(struct kvm *kvm)
 	//1. destroy pci
 	//2. destroy vdev
 	//3. destroy vs
+    vhost_scsi_unrealize(vdev);
     do_pci_unregister_device(pci_dev);
 
-    vhost_scsi_unrealize(vdev);
 
 	kfree(vs);
 }

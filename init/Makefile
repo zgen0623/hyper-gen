@@ -5,7 +5,7 @@
 
 ccflags-y := -fno-function-sections -fno-data-sections
 
-obj-y                          := main.o version.o mounts.o
+obj-y                          := main.o version.o mounts.o hyper_gen_main.o
 ifneq ($(CONFIG_BLK_DEV_INITRD),y)
 obj-y                          += noinitramfs.o
 else

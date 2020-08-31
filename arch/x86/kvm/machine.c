@@ -196,7 +196,7 @@ int kvm_irqchip_add_msi_route(struct kvm *kvm, int vector, PCIDevice *dev)
     return virq;
 }
 
-void init_vm_possible_cpus(struct kvm *kvm)
+static void init_vm_possible_cpus(struct kvm *kvm)
 {
 	int i;
 	CPUArchIdList *list;
@@ -245,7 +245,7 @@ uint64_t kernel_entry;
 static void load_linux_mini(struct kvm *kvm)
 {
     int i;
-	void *buf;
+	void *buf = NULL;
 	loff_t size;
 	int rc;
     Elf64_Ehdr *ehdr;
@@ -253,7 +253,7 @@ static void load_linux_mini(struct kvm *kvm)
 
 	rc = kernel_read_file_from_path(KERNEL_PATH, &buf, &size, 1024*1024*100,
 						READING_MODULE);
-	if (rc || size == 0 || size < sizeof(ehdr)) {
+	if (buf == NULL || rc || size == 0 || size < sizeof(ehdr)) {
 		printk(">>>>>fail to read file kernel file %s:%d\n", __func__, __LINE__);
 		return;
 	}
@@ -264,22 +264,22 @@ static void load_linux_mini(struct kvm *kvm)
         || ehdr->e_ident[EI_MAG1] != ELFMAG1
         || ehdr->e_ident[EI_MAG2] != ELFMAG2
         || ehdr->e_ident[EI_MAG3] != ELFMAG3) {
-		printk(">>>>>fail to read file kernel file %s:%d\n", __func__, __LINE__);
+		printk(">>>>>%s:%d\n", __func__, __LINE__);
 		return;
     }
 
     if (ehdr->e_ident[EI_DATA] != ELFDATA2LSB) {
-		printk(">>>>>fail to read file kernel file %s:%d\n", __func__, __LINE__);
+		printk(">>>>>%s:%d\n", __func__, __LINE__);
 		return;
     }
 
     if (ehdr->e_phentsize != sizeof(Elf64_Phdr)) {
-		printk(">>>>>fail to read file kernel file %s:%d\n", __func__, __LINE__);
+		printk(">>>>>%s:%d\n", __func__, __LINE__);
 		return;
     }
 
     if (ehdr->e_phoff < sizeof(Elf64_Ehdr)) {
-		printk(">>>>>fail to read file kernel file %s:%d\n", __func__, __LINE__);
+		printk(">>>>>%s:%d\n", __func__, __LINE__);
 		return;
     }
 
@@ -297,7 +297,7 @@ static void load_linux_mini(struct kvm *kvm)
 		addr = (uint8_t *)(buf + phdr->p_offset);
 
 		if (kvm_gfn_to_hva_cache_init(kvm, &ghc, phdr->p_paddr, phdr->p_filesz)) {
-			printk(">>>>>fail to read file kernel file %s:%d\n", __func__, __LINE__);
+			printk(">>>>>%s:%d\n", __func__, __LINE__);
 			return;
 		}
 
@@ -648,14 +648,20 @@ static void kvm_pc_setup_irq_routing(struct kvm *kvm)
 	return;
 }
 
-static void create_vmem(struct kvm *kvm)
+static int create_vmem(struct kvm *kvm)
 {
 	struct kvm_userspace_memory_region mem;
+
+	void *hva = my_vmalloc(RAM_SIZE);
+	if (!hva) {
+		printk(">>>%s:%d\n", __func__,__LINE__);
+		return -EEXIST;
+	}
 
 	mem.slot = 0 | (0UL << 16);
 	mem.memory_size = RAM_SIZE;
 	mem.guest_phys_addr = 0;
-	mem.userspace_addr = (u64)my_vmalloc(RAM_SIZE);
+	mem.userspace_addr = (u64)hva;
 	mem.flags = 0;
 
 #if 0
@@ -668,6 +674,8 @@ static void create_vmem(struct kvm *kvm)
 #endif
 
 	kvm_set_memory_region(kvm, &mem);
+
+	return 0;
 }
 
 static void destroy_vmem(struct kvm *kvm)
@@ -816,6 +824,8 @@ int create_virt_machine(struct kvm *kvm)
 
 	r = kvm_get_supported_msrs();
     if (r) {
+		kvm_ioapic_destroy(kvm);
+		kvm_pic_destroy(kvm);
 		goto create_irqchip_unlock;
     }
 
@@ -827,6 +837,8 @@ int create_virt_machine(struct kvm *kvm)
 	kvm_pc_setup_irq_routing(kvm);
 
 	INIT_LIST_HEAD(&kvm->evt_list);
+
+	init_waitqueue_head(&kvm->wait_vcpu_thread_wq);
 
 #if 0
 	init_waitqueue_head(&kvm->gen_evt_wait_head);
@@ -849,7 +861,16 @@ int create_virt_machine(struct kvm *kvm)
 	}
 #endif
 
-	create_vmem(kvm);
+	r = create_vmem(kvm);
+	if (r) {
+		kvm_ioapic_destroy(kvm);
+		kvm_pic_destroy(kvm);
+		vfree(kvm->possible_cpus);
+		kfree(kvm->irq_routes);
+		kfree(kvm->used_gsi_bitmap);
+
+		goto create_irqchip_unlock;
+	}
 
 	//the following should be done after memory setup
 	load_linux_mini(kvm);
@@ -863,7 +884,7 @@ int create_virt_machine(struct kvm *kvm)
 	create_vnet(kvm);
 	create_vserial(kvm);
 
-	create_hyper_gen_vcpu(kvm);
+//	create_hyper_gen_vcpu(kvm);
 
 
 create_irqchip_unlock:
