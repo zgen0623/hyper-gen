@@ -863,6 +863,7 @@ int create_virt_machine(struct kvm *kvm)
 
 	r = create_vmem(kvm);
 	if (r) {
+		kvm_free_pit(kvm);
 		kvm_ioapic_destroy(kvm);
 		kvm_pic_destroy(kvm);
 		vfree(kvm->possible_cpus);

@@ -89,6 +89,7 @@
 #include <uapi/linux/kd.h>
 #include <uapi/asm-generic/fcntl.h>
 #include <hyper_gen/hyper_gen_work.h>
+#include <linux/kvm_host.h>
 
 #define TTYDEF_IFLAG    (BRKINT | ISTRIP | ICRNL | IMAXBEL | IXON | IXANY)
 #define TTYDEF_OFLAG    (OPOST | ONLCR | XTABS)
@@ -236,8 +237,35 @@ static int start_vm_console(struct hyper_gen_tty_context *ctx, unsigned long vm_
 	return 0;
 }
 
+int hyper_gen_create_vm_from_mgnt(void);
+int hyper_gen_destroy_vm(unsigned long vm_id);
+
+static int hyper_gen_create_vm_by_template(unsigned long template_id)
+{
+	//TODO: implement template_id
+
+	hyper_gen_create_vm_from_mgnt();
+
+	return 0;
+}
+
+void list_fn(struct kvm *kvm, void *arg)
+{
+	char tmp[32];
+	struct hyper_gen_tty_context *ctx = arg;
+
+	sprintf(tmp, "VMID: %d\n", kvm->id);
+	sys_write(ctx->fd, (const char __user *)tmp, strlen(tmp));
+}
+
+void foreach_kvm_call_fn(for_each_kvm_fn_t fn, void *arg);
+
 static bool parse_cmd(struct hyper_gen_tty_context *ctx)
 {
+	int ret;
+	char *val;
+	unsigned long vm_id;
+	unsigned long template_id;
 	char tmp[32];
 	char *param;
 	char *args = ctx->rx_buf;
@@ -246,10 +274,6 @@ static bool parse_cmd(struct hyper_gen_tty_context *ctx)
 	param = strsep(&args, " ");
 
 	if (!strcmp(param, "vm_console")) {
-		int ret;
-		char *val;
-		unsigned long vm_id;
-
 		val = strsep(&args, " ");
 		if (!val)
 			goto fail_val;
@@ -261,7 +285,35 @@ static bool parse_cmd(struct hyper_gen_tty_context *ctx)
 		ret = start_vm_console(ctx, vm_id);
 		if (ret)
 			goto fail_val;
+	} else if (!strcmp(param, "vm_create")) {
+		val = strsep(&args, " ");
+		if (!val)
+			goto fail_val;
 
+		ret = kstrtoul(val, 0, &template_id);
+		if (ret)
+			goto fail_val;
+
+		ret = hyper_gen_create_vm_by_template(template_id);
+		if (ret)
+			goto fail_val;
+		return true;
+	} else if (!strcmp(param, "vm_destroy")) {
+		val = strsep(&args, " ");
+		if (!val)
+			goto fail_val;
+
+		ret = kstrtoul(val, 0, &vm_id);
+		if (ret)
+			goto fail_val;
+
+		ret = hyper_gen_destroy_vm(vm_id);
+		if (ret)
+			goto fail_val;
+		return true;
+	} else if (!strcmp(param, "vm_list")) {
+		foreach_kvm_call_fn(list_fn, ctx);
+		return true;
 	} else {
 		sprintf(tmp, "%s\n", "Invalid Cmd");
 		goto fail;

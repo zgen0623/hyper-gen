@@ -714,8 +714,10 @@ static struct kvm *kvm_create_vm(unsigned long type)
 
 out_err:
 #if defined(CONFIG_MMU_NOTIFIER) && defined(KVM_ARCH_WANT_MMU_NOTIFIER)
+#if 0
 	if (kvm->mmu_notifier.ops)
 		mmu_notifier_unregister(&kvm->mmu_notifier, current->mm);
+#endif
 #endif
 out_err_no_mmu_notifier:
 	cleanup_srcu_struct(&kvm->irq_srcu);
@@ -730,7 +732,7 @@ out_err_no_disable:
 	for (i = 0; i < KVM_ADDRESS_SPACE_NUM; i++)
 		kvm_free_memslots(kvm, __kvm_memslots(kvm, i));
 	kvm_arch_free_vm(kvm);
-	mmdrop(current->mm);
+//	mmdrop(current->mm);
 	return NULL;
 }
 
@@ -750,6 +752,18 @@ struct kvm *find_kvm_by_id(uint64_t kvm_id)
 	mutex_unlock(&kvm_lock);
 
 	return NULL;
+}
+
+void foreach_kvm_call_fn(for_each_kvm_fn_t fn, void *arg)
+{
+	struct kvm *kvm;
+
+	mutex_lock(&kvm_lock);
+
+	list_for_each_entry(kvm, &vm_list, vm_list)
+		fn(kvm, arg);
+
+	mutex_unlock(&kvm_lock);
 }
 
 
@@ -3824,7 +3838,7 @@ static int kvm_arch_handle_exit(struct cpu_state *cs, struct kvm_run *run)
     return ret;
 }
 
-static int hyper_gen_kvm_dev_ioctl_destroy_vm(unsigned long vm_id);
+int hyper_gen_destroy_vm(unsigned long vm_id);
 
 static void kvm_cpu_exec(struct cpu_state *cpu)
 {
@@ -3913,7 +3927,7 @@ static void kvm_cpu_exec(struct cpu_state *cpu)
 
     if (ret < 0) {
         cpu->stop = true;
-		hyper_gen_kvm_dev_ioctl_destroy_vm(cpu->vcpu->kvm->id);
+		hyper_gen_destroy_vm(cpu->vcpu->kvm->id);
     }
 
     return;
@@ -3977,8 +3991,8 @@ static void hyper_gen_create_vm(struct hyper_gen_work *work)
 
 	kvm = kvm_create_vm(0);
 	if (!kvm) {
-		printk(">>>%s:%d\n", __func__,__LINE__);
-		vm_work->ret = -1;
+		printk(">>>%s:%d fail to create vm!!!\n", __func__,__LINE__);
+//		vm_work->ret = -1;
 		goto out;
 	}
 
@@ -4012,13 +4026,15 @@ static void hyper_gen_create_vm(struct hyper_gen_work *work)
     	wake_up(&cpu->halt);
 	}
 
-	vm_work->ret = 0;
+	//vm_work->ret = 0;
 out:
-	atomic_set(&vm_work->done, 1);
-	wake_up(&vm_work->wq);
+//	atomic_set(&vm_work->done, 1);
+//	wake_up(&vm_work->wq);
+
+	kfree(vm_work);
 }
 
-static int hyper_gen_kvm_dev_ioctl_create_vm(void)
+int hyper_gen_create_vm_from_mgnt(void)
 {
 	int r = 0;
 	struct hyper_gen_vm_work *vm_work =
@@ -4027,17 +4043,17 @@ static int hyper_gen_kvm_dev_ioctl_create_vm(void)
 	vm_work->work.flags = 0;
 	vm_work->work.fn = hyper_gen_create_vm;
 	vm_work->work.opaque = (void*)&vm_work->work;
-	atomic_set(&vm_work->done, 0);
-	init_waitqueue_head(&vm_work->wq);
+//	atomic_set(&vm_work->done, 0);
+//	init_waitqueue_head(&vm_work->wq);
 
 	hyper_gen_commit_work(&vm_work->work);
 
+#if 0
 	wait_event(vm_work->wq,
 			   !!atomic_read(&vm_work->done));
 
 	r = vm_work->ret;
-
-	kfree(vm_work);
+#endif
 
 	return r;
 }
@@ -4077,7 +4093,7 @@ static bool all_threads_paused(struct kvm *kvm)
     return true;
 }
 
-static void hyper_gen_destroy_vm(struct hyper_gen_work *work)
+static void hyper_gen_destroy_vm_fn(struct hyper_gen_work *work)
 {
 	int i;
 	int ret = 0;
@@ -4109,7 +4125,7 @@ static void hyper_gen_destroy_vm(struct hyper_gen_work *work)
 	kvm_put_kvm(kvm);
 }
 
-static int hyper_gen_kvm_dev_ioctl_destroy_vm(unsigned long vm_id)
+int hyper_gen_destroy_vm(unsigned long vm_id)
 {
 	int r = 0;
 	struct kvm *kvm;
@@ -4125,7 +4141,7 @@ static int hyper_gen_kvm_dev_ioctl_destroy_vm(unsigned long vm_id)
 	if (test_and_set_bit(WORK_STARTED, &vm_work->work.flags))
 		return 0;
 
-	vm_work->work.fn = hyper_gen_destroy_vm;
+	vm_work->work.fn = hyper_gen_destroy_vm_fn;
 	vm_work->work.opaque = (void*)&vm_work->work;
 	vm_work->arg = (void*)kvm;
 
@@ -4148,7 +4164,7 @@ static long kvm_dev_ioctl(struct file *filp,
 		break;
 	case KVM_CREATE_VM:
 //		r = kvm_dev_ioctl_create_vm(arg);
-		r = hyper_gen_kvm_dev_ioctl_create_vm();
+		r = hyper_gen_create_vm_from_mgnt();
 		break;
 	case KVM_CHECK_EXTENSION:
 		r = kvm_vm_ioctl_check_extension_generic(NULL, arg);

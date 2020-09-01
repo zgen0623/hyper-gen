@@ -8620,7 +8620,7 @@ int kvm_arch_post_init_vm(struct kvm *kvm)
 	if (r != 0)
 		return r;
 
-	create_virt_machine(kvm);
+	r = create_virt_machine(kvm);
 	if (r != 0)
 		return r;
 

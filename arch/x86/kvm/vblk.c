@@ -324,7 +324,8 @@ static void vhost_scsi_unrealize(VirtIODevice *vdev)
 	int i;
     VHostSCSI *vs = (VHostSCSI *)vdev;
 
-	virtio_set_status(vdev, 0);
+    vhost_scsi_stop(vs);
+//	virtio_set_status(vdev, 0);
 
 	for (i = 0; i < VHOST_SCSI_VQ_NUM_FIXED + vs->conf.num_queues; i++)
 		virtio_del_queue(vdev, i);

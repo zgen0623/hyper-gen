@@ -601,6 +601,9 @@ struct kvm {
 #endif
 };
 
+typedef void (*for_each_kvm_fn_t)(struct kvm *, void *);
+
+
 #define kvm_err(fmt, ...) \
 	pr_err("kvm [%i]: " fmt, task_pid_nr(current), ## __VA_ARGS__)
 #define kvm_info(fmt, ...) \
