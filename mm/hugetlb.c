@@ -2412,7 +2412,7 @@ static ssize_t nr_hugepages_show_common(struct kobject *kobj,
 	return sprintf(buf, "%lu\n", nr_huge_pages);
 }
 
-static ssize_t __nr_hugepages_store_common(bool obey_mempolicy,
+ssize_t __nr_hugepages_store_common(bool obey_mempolicy,
 					   struct hstate *h, int nid,
 					   unsigned long count, size_t len)
 {
@@ -2468,6 +2468,8 @@ static ssize_t nr_hugepages_store_common(bool obey_mempolicy,
 		return err;
 
 	h = kobj_to_hstate(kobj, &nid);
+	printk(">>>%s:%d h=%lx order=%d nid=%d\n", __func__, __LINE__, h, h->order, nid);
+
 	return __nr_hugepages_store_common(obey_mempolicy, h, nid, count, len);
 }
 
@@ -2620,6 +2622,7 @@ static void __init hugetlb_sysfs_init(void)
 		return;
 
 	for_each_hstate(h) {
+		printk(">>>%s:%d h=%lx huge_order=%d\n", __func__, __LINE__, h, h->order);
 		err = hugetlb_sysfs_add_hstate(h, hugepages_kobj,
 					 hstate_kobjs, &hstate_attr_group);
 		if (err)
@@ -2832,15 +2835,19 @@ void __init hugetlb_add_hstate(unsigned int order)
 		pr_warn("hugepagesz= specified twice, ignoring\n");
 		return;
 	}
+
 	BUG_ON(hugetlb_max_hstate >= HUGE_MAX_HSTATE);
 	BUG_ON(order == 0);
+
 	h = &hstates[hugetlb_max_hstate++];
 	h->order = order;
 	h->mask = ~((1ULL << (order + PAGE_SHIFT)) - 1);
 	h->nr_huge_pages = 0;
 	h->free_huge_pages = 0;
+
 	for (i = 0; i < MAX_NUMNODES; ++i)
 		INIT_LIST_HEAD(&h->hugepage_freelists[i]);
+
 	INIT_LIST_HEAD(&h->hugepage_activelist);
 	h->next_nid_to_alloc = first_memory_node;
 	h->next_nid_to_free = first_memory_node;

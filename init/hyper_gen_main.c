@@ -852,6 +852,11 @@ static int hyper_gen_vm_func(void *unused)
 }
 #endif
 
+#include <linux/hugetlb.h>
+ssize_t __nr_hugepages_store_common(bool obey_mempolicy,
+					   struct hstate *h, int nid,
+					   unsigned long count, size_t len);
+
 void hyper_gen_init(void)
 {
 	int pid;
@@ -863,6 +868,9 @@ void hyper_gen_init(void)
 	rcu_read_unlock();
 
 	check_hot_buddy();
+
+	__nr_hugepages_store_common(0, &default_hstate, -1, 1024, 0);
+
 
 #if 0
 //	my_task_test = 1;
