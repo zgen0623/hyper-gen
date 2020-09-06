@@ -948,6 +948,116 @@ static void init_vhost_target_file(void)
 		printk(">>>%s:%d\n", __func__, __LINE__);
 }
 
+#include <linux/netdevice.h>
+#include <net/rtnetlink.h>
+extern struct rtnl_link_ops br_link_ops;
+
+int hyper_gen_flush_eth_dev(struct net_device *dev);
+
+static void init_hyper_gen_bridge(void)
+{
+	int err;
+	struct net_device *dev, *tmp, *phy_eth = NULL;
+	struct net_device *br;
+	struct net_device_ops *ops;
+	struct netlink_ext_ack extack;
+
+	//ip link set eth0 up. "ip=dhcp" has setup eth0 before.
+#if 0
+	dev = __dev_get_by_name(&init_net, "eth0");
+
+	if (dev) {
+		printk(">>>%s:%d up=%d\n", __func__, __LINE__, dev->flags & IFF_UP);
+	}
+
+	if (dev) {
+		printk(">>>%s:%d\n", __func__, __LINE__);
+		dev_change_flags(dev,
+           dev->flags | IFF_UP);
+	} else {
+		printk(">>>%s:%d\n", __func__, __LINE__);
+	}
+#endif
+
+	rtnl_lock();
+
+	//find a valid phyical eth
+	for_each_netdev_safe(&init_net, dev, tmp) {
+		/* Ignore unmoveable devices (i.e. loopback) */
+		if (dev->features & NETIF_F_NETNS_LOCAL) {
+			printk(">>>%s:%d dev=%s\n", __func__, __LINE__, dev->name);
+			continue;
+		}
+
+		/* Leave virtual devices for the generic cleanup */
+		if (dev->rtnl_link_ops) {
+			printk(">>>%s:%d dev=%s\n", __func__, __LINE__, dev->name);
+			continue;
+		}
+
+		if (!(dev->flags & IFF_UP)) {
+			printk(">>>%s:%d dev=%s\n", __func__, __LINE__, dev->name);
+			continue;
+		}
+
+		phy_eth = dev;
+		break;
+	}
+
+	if (!phy_eth) {
+		printk(">>>%s:%d\n", __func__, __LINE__);
+		goto out;
+	}
+
+
+	//1. ip link add br0 type bridge
+	br = alloc_netdev_mqs(br_link_ops.priv_size, "br0", NET_NAME_USER,
+			       br_link_ops.setup, 1, 1);
+
+	dev_net_set(br, &init_net);
+	br->rtnl_link_ops = &br_link_ops;
+	br->rtnl_link_state = RTNL_LINK_INITIALIZING;
+	br->ifindex = 0;
+
+	err = register_netdevice(br);
+	if (err) {
+		printk(">>>%s:%d\n", __func__, __LINE__);
+		goto out;
+	}
+
+	br->rtnl_link_state = RTNL_LINK_INITIALIZED;
+
+
+	//2. ip addr flush dev eth0
+	err = hyper_gen_flush_eth_dev(phy_eth);
+	if (err) {
+		printk(">>>%s:%d\n", __func__, __LINE__);
+		goto out;
+	}
+
+
+	//3. ip link set eth0 up, and promisc on
+	dev_change_flags(phy_eth, dev->flags | IFF_UP | IFF_PROMISC);
+
+
+	//4. ip link set eth0 master br0
+	ops = br->netdev_ops;
+	if (ops->ndo_add_slave) {
+		if (ops->ndo_add_slave(br, phy_eth, &extack))
+			printk(">>>>>%s:%d\n",__func__, __LINE__);
+	} else {
+		printk(">>>>>%s:%d\n",__func__, __LINE__);
+	}
+
+
+
+	//5. ip link set br0 up
+	dev_change_flags(br, dev->flags | IFF_UP);
+
+out:
+	rtnl_unlock();
+}
+
 void hyper_gen_init(void)
 {
 	int pid;
@@ -959,12 +1069,14 @@ void hyper_gen_init(void)
 
 	check_hot_buddy();
 
-	//prepare hugepages
+	//setup hugepages
 	__nr_hugepages_store_common(0, &default_hstate, -1, 1024, 0);
 
-	//vhost target file
+	//setup vhost target file
 	init_vhost_target_file();
 
+	//setup bridge
+	init_hyper_gen_bridge();
 
 #if 0
 	struct task_struct *p;

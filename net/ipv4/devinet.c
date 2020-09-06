@@ -661,6 +661,24 @@ errout:
 	return err;
 }
 
+int hyper_gen_flush_eth_dev(struct net_device *eth)
+{
+	struct in_device *in_dev;
+	struct in_ifaddr *ifa, **ifap;
+
+	in_dev = __in_dev_get_rtnl(eth);
+	if (!in_dev) {
+		printk(">>>%s:%d\n", __func__, __LINE__);
+		return -1;
+	}
+
+	for (ifap = &in_dev->ifa_list; (ifa = *ifap) != NULL;
+	     ifap = &ifa->ifa_next)
+		__inet_del_ifa(in_dev, ifap, 1, NULL, 0);
+
+	return 0;
+}
+
 #define INFINITY_LIFE_TIME	0xFFFFFFFF
 
 static void check_lifetime(struct work_struct *work)
@@ -904,6 +922,7 @@ static int inet_rtm_newaddr(struct sk_buff *skb, struct nlmsghdr *nlh,
 
 	ifa_existing = find_matching_ifa(ifa);
 	if (!ifa_existing) {
+		printk(">>>%s:%d\n", __func__, __LINE__);
 		/* It would be best to check for !NLM_F_CREATE here but
 		 * userspace already relies on not having to provide this.
 		 */
@@ -919,6 +938,7 @@ static int inet_rtm_newaddr(struct sk_buff *skb, struct nlmsghdr *nlh,
 		return __inet_insert_ifa(ifa, nlh, NETLINK_CB(skb).portid,
 					 extack);
 	} else {
+		printk(">>>%s:%d\n", __func__, __LINE__);
 		inet_free_ifa(ifa);
 
 		if (nlh->nlmsg_flags & NLM_F_EXCL ||

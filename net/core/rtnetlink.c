@@ -2777,20 +2777,32 @@ static int rtnl_newlink(struct sk_buff *skb, struct nlmsghdr *nlh,
 #ifdef CONFIG_MODULES
 replay:
 #endif
+	printk(">>>%s:%d\n", __func__,__LINE__);
+
 	err = nlmsg_parse(nlh, sizeof(*ifm), tb, IFLA_MAX, ifla_policy, extack);
 	if (err < 0)
 		return err;
 
+	printk(">>>%s:%d\n", __func__,__LINE__);
+
+
 	err = rtnl_ensure_unique_netns(tb, extack, false);
 	if (err < 0)
 		return err;
+
+
+	printk(">>>%s:%d\n", __func__,__LINE__);
 
 	if (tb[IFLA_IFNAME])
 		nla_strlcpy(ifname, tb[IFLA_IFNAME], IFNAMSIZ);
 	else
 		ifname[0] = '\0';
 
+
+
 	ifm = nlmsg_data(nlh);
+
+	printk(">>>%s:%d ifname=%s idx=%d\n", __func__,__LINE__, ifname, ifm->ifi_index);
 	if (ifm->ifi_index > 0)
 		dev = __dev_get_by_index(net, ifm->ifi_index);
 	else {
@@ -2800,17 +2812,27 @@ replay:
 			dev = NULL;
 	}
 
+
+	printk(">>>%s:%d %llx\n", __func__,__LINE__, dev);
+
 	if (dev) {
 		master_dev = netdev_master_upper_dev_get(dev);
 		if (master_dev)
 			m_ops = master_dev->rtnl_link_ops;
 	}
 
+
+	printk(">>>%s:%d\n", __func__,__LINE__);
+
 	err = validate_linkmsg(dev, tb);
 	if (err < 0)
 		return err;
 
+
+	printk(">>>%s:%d\n", __func__,__LINE__);
+
 	if (tb[IFLA_LINKINFO]) {
+	printk(">>>%s:%d\n", __func__,__LINE__);
 		err = nla_parse_nested(linkinfo, IFLA_INFO_MAX,
 				       tb[IFLA_LINKINFO], ifla_info_policy,
 				       NULL);
@@ -2819,13 +2841,20 @@ replay:
 	} else
 		memset(linkinfo, 0, sizeof(linkinfo));
 
+
+	printk(">>>%s:%d\n", __func__,__LINE__);
+
 	if (linkinfo[IFLA_INFO_KIND]) {
+	printk(">>>%s:%d\n", __func__,__LINE__);
 		nla_strlcpy(kind, linkinfo[IFLA_INFO_KIND], sizeof(kind));
 		ops = rtnl_link_ops_get(kind);
 	} else {
 		kind[0] = '\0';
 		ops = NULL;
 	}
+
+
+	printk(">>>%s:%d\n", __func__,__LINE__);
 
 	if (1) {
 		struct nlattr *attr[ops ? ops->maxtype + 1 : 1];
@@ -2834,8 +2863,10 @@ replay:
 		struct nlattr **slave_data = NULL;
 		struct net *dest_net, *link_net = NULL;
 
+	printk(">>>%s:%d\n", __func__,__LINE__);
 		if (ops) {
 			if (ops->maxtype && linkinfo[IFLA_INFO_DATA]) {
+	printk(">>>%s:%d\n", __func__,__LINE__);
 				err = nla_parse_nested(attr, ops->maxtype,
 						       linkinfo[IFLA_INFO_DATA],
 						       ops->policy, NULL);
@@ -2844,12 +2875,14 @@ replay:
 				data = attr;
 			}
 			if (ops->validate) {
+	printk(">>>%s:%d\n", __func__,__LINE__);
 				err = ops->validate(tb, data, extack);
 				if (err < 0)
 					return err;
 			}
 		}
 
+	printk(">>>%s:%d\n", __func__,__LINE__);
 		if (m_ops) {
 			if (m_ops->slave_maxtype &&
 			    linkinfo[IFLA_INFO_SLAVE_DATA]) {
@@ -2864,6 +2897,7 @@ replay:
 			}
 		}
 
+	printk(">>>%s:%d\n", __func__,__LINE__);
 		if (dev) {
 			int status = 0;
 
@@ -2899,6 +2933,7 @@ replay:
 					  status);
 		}
 
+	printk(">>>%s:%d\n", __func__,__LINE__);
 		if (!(nlh->nlmsg_flags & NLM_F_CREATE)) {
 			if (ifm->ifi_index == 0 && tb[IFLA_GROUP])
 				return rtnl_group_changelink(skb, net,
@@ -2906,9 +2941,11 @@ replay:
 						ifm, extack, tb);
 			return -ENODEV;
 		}
+	printk(">>>%s:%d\n", __func__,__LINE__);
 
 		if (tb[IFLA_MAP] || tb[IFLA_PROTINFO])
 			return -EOPNOTSUPP;
+	printk(">>>%s:%d\n", __func__,__LINE__);
 
 		if (!ops) {
 #ifdef CONFIG_MODULES
@@ -2923,9 +2960,11 @@ replay:
 #endif
 			return -EOPNOTSUPP;
 		}
+	printk(">>>%s:%d\n", __func__,__LINE__);
 
 		if (!ops->setup)
 			return -EOPNOTSUPP;
+	printk(">>>%s:%d\n", __func__,__LINE__);
 
 		if (!ifname[0]) {
 			snprintf(ifname, IFNAMSIZ, "%s%%d", ops->kind);
@@ -2937,6 +2976,7 @@ replay:
 			return PTR_ERR(dest_net);
 
 		if (tb[IFLA_LINK_NETNSID]) {
+	printk(">>>%s:%d\n", __func__,__LINE__);
 			int id = nla_get_s32(tb[IFLA_LINK_NETNSID]);
 
 			link_net = get_net_ns_by_id(dest_net, id);
@@ -2959,6 +2999,7 @@ replay:
 		dev->ifindex = ifm->ifi_index;
 
 		if (ops->newlink) {
+	printk(">>>%s:%d %d\n", __func__,__LINE__, dev->ifindex);
 			err = ops->newlink(link_net ? : net, dev, tb, data,
 					   extack);
 			/* Drivers should call free_netdev() in ->destructor
@@ -2972,26 +3013,33 @@ replay:
 				goto out;
 			}
 		} else {
+	printk(">>>%s:%d %d\n", __func__,__LINE__, dev->ifindex);
 			err = register_netdevice(dev);
 			if (err < 0) {
 				free_netdev(dev);
 				goto out;
 			}
 		}
+
 		err = rtnl_configure_link(dev, ifm);
 		if (err < 0)
 			goto out_unregister;
+
 		if (link_net) {
+	printk(">>>%s:%d\n", __func__,__LINE__);
 			err = dev_change_net_namespace(dev, dest_net, ifname);
 			if (err < 0)
 				goto out_unregister;
 		}
+
 		if (tb[IFLA_MASTER]) {
+	printk(">>>%s:%d\n", __func__,__LINE__);
 			err = do_set_master(dev, nla_get_u32(tb[IFLA_MASTER]),
 					    extack);
 			if (err)
 				goto out_unregister;
 		}
+
 out:
 		if (link_net)
 			put_net(link_net);
@@ -3028,9 +3076,13 @@ static int rtnl_getlink(struct sk_buff *skb, struct nlmsghdr *nlh,
 	if (err < 0)
 		return err;
 
+
+
 	err = rtnl_ensure_unique_netns(tb, extack, true);
 	if (err < 0)
 		return err;
+
+
 
 	if (tb[IFLA_IF_NETNSID]) {
 		netnsid = nla_get_s32(tb[IFLA_IF_NETNSID]);
@@ -3039,11 +3091,17 @@ static int rtnl_getlink(struct sk_buff *skb, struct nlmsghdr *nlh,
 			return PTR_ERR(tgt_net);
 	}
 
+
+
 	if (tb[IFLA_IFNAME])
 		nla_strlcpy(ifname, tb[IFLA_IFNAME], IFNAMSIZ);
 
+
+
 	if (tb[IFLA_EXT_MASK])
 		ext_filter_mask = nla_get_u32(tb[IFLA_EXT_MASK]);
+
+
 
 	err = -EINVAL;
 	ifm = nlmsg_data(nlh);
@@ -3054,14 +3112,21 @@ static int rtnl_getlink(struct sk_buff *skb, struct nlmsghdr *nlh,
 	else
 		goto out;
 
+
+
+
 	err = -ENODEV;
 	if (dev == NULL)
 		goto out;
+
+
 
 	err = -ENOBUFS;
 	nskb = nlmsg_new(if_nlmsg_size(dev, ext_filter_mask), GFP_KERNEL);
 	if (nskb == NULL)
 		goto out;
+
+
 
 	err = rtnl_fill_ifinfo(nskb, dev, net,
 			       RTM_NEWLINK, NETLINK_CB(skb).portid,
@@ -3073,6 +3138,8 @@ static int rtnl_getlink(struct sk_buff *skb, struct nlmsghdr *nlh,
 		kfree_skb(nskb);
 	} else
 		err = rtnl_unicast(nskb, net, NETLINK_CB(skb).portid);
+
+
 out:
 	if (netnsid >= 0)
 		put_net(tgt_net);

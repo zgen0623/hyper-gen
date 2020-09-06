@@ -1026,8 +1026,11 @@ static int __ref kernel_init(void *unused)
 	hyper_gen_init();
 
 #if 0
-	while (true) {
-		asm volatile("hlt");
+	while (1) {
+		set_current_state(TASK_INTERRUPTIBLE);
+		schedule();
+//		__set_current_state(TASK_RUNNING);
+		//asm volatile("hlt");
 	}
 #endif
 
