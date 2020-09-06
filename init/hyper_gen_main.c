@@ -804,11 +804,11 @@ static int hyper_gen_daemon(void *data)
 void check_hot_buddy(void);
 
 int my_task_test = 0;
-static int vcpu_exit = 0;
 
 void dump_current_cfs_rq_tg(void);
 
 #if 0
+static int vcpu_exit = 0;
 static int hyper_gen_vcpu_func(void *unused)
 {
 	printk(">>>>%s:%d hyper_gen_vcpu\n", __func__, __LINE__);
@@ -857,10 +857,100 @@ ssize_t __nr_hugepages_store_common(bool obey_mempolicy,
 					   struct hstate *h, int nid,
 					   unsigned long count, size_t len);
 
+static void init_vhost_target_file(void)
+{
+	int ret;
+	int fd;
+	char buf[128];
+
+	ret = sys_mount("sysfs", "/sys", "sysfs", MS_MGC_VAL, NULL);
+	if (ret)
+		printk(">>>%s:%d\n", __func__, __LINE__);
+
+	ret = sys_mount("configfs", "/sys/kernel/config", "configfs", MS_MGC_VAL, NULL);
+	if (ret)
+		printk(">>>%s:%d\n", __func__, __LINE__);
+
+
+	//1. mkdir -p /sys/kernel/config/target/core/fileio_2/myFile2
+	ret = sys_mkdir("/sys/kernel/config/target/core/fileio_2", 0777);
+	if (ret)
+		printk(">>>%s:%d\n", __func__, __LINE__);
+
+	ret = sys_mkdir("/sys/kernel/config/target/core/fileio_2/myFile2", 0777);
+	if (ret)
+		printk(">>>%s:%d\n", __func__, __LINE__);
+
+
+	//2. echo 'fd_dev_name=/home/gen/openSource/guen/debootstrap.ext2.raw,fd_dev_size=5116637696' > /sys/kernel/config/target/core/fileio_2/myFile2/control
+	if ((fd = sys_open((const char __user *)"/sys/kernel/config/target/core/fileio_2/myFile2/control",
+			O_WRONLY, 0)) < 0) {
+		printk(">>>%s:%d\n", __func__, __LINE__);
+		return;
+	}
+
+	sprintf(buf, "%s", "fd_dev_name=/home/gen/openSource/guen/debootstrap.ext2.raw,fd_dev_size=5116637696");
+	ret = sys_write(fd, buf, strlen(buf));
+	if (ret <= 0)
+		printk(">>>%s:%d\n", __func__, __LINE__);
+
+	//3. echo 1 > /sys/kernel/config/target/core/fileio_2/myFile2/enable
+	if ((fd = sys_open((const char __user *)"/sys/kernel/config/target/core/fileio_2/myFile2/enable",
+			O_WRONLY, 0)) < 0) {
+		printk(">>>%s:%d\n", __func__, __LINE__);
+		return;
+	}
+
+	sprintf(buf, "%d", 1);
+	ret = sys_write(fd, buf, strlen(buf));
+	if (ret <= 0)
+		printk(">>>%s:%d\n", __func__, __LINE__);
+
+
+
+	//4. mkdir -p /sys/kernel/config/target/vhost/naa.600140554cf3a18e/tpgt_0/lun/lun_0
+	ret = sys_mkdir("/sys/kernel/config/target/vhost", 0777);
+	if (ret)
+		printk(">>>%s:%d\n", __func__, __LINE__);
+
+	ret = sys_mkdir("/sys/kernel/config/target/vhost/naa.600140554cf3a18e", 0777);
+	if (ret)
+		printk(">>>%s:%d\n", __func__, __LINE__);
+
+	ret = sys_mkdir("/sys/kernel/config/target/vhost/naa.600140554cf3a18e/tpgt_0", 0777);
+	if (ret)
+		printk(">>>%s:%d\n", __func__, __LINE__);
+
+	ret = sys_mkdir("/sys/kernel/config/target/vhost/naa.600140554cf3a18e/tpgt_0/lun/lun_0", 0777);
+	if (ret)
+		printk(">>>%s:%d\n", __func__, __LINE__);
+
+
+	//5. ln -sf /sys/kernel/config/target/core/fileio_2/myFile2 /sys/kernel/config/target/vhost/naa.600140554cf3a18e/tpgt_0/lun/lun_0/123456
+	ret = sys_symlinkat("/sys/kernel/config/target/core/fileio_2/myFile2",
+		AT_FDCWD,
+		"/sys/kernel/config/target/vhost/naa.600140554cf3a18e/tpgt_0/lun/lun_0/123456");
+	if (ret)
+		printk(">>>%s:%d\n", __func__, __LINE__);
+
+
+
+	//6. echo naa.600140554cf3a18e > /sys/kernel/config/target/vhost/naa.600140554cf3a18e/tpgt_0/nexus
+	if ((fd = sys_open((const char __user *)"/sys/kernel/config/target/vhost/naa.600140554cf3a18e/tpgt_0/nexus",
+			O_WRONLY, 0)) < 0) {
+		printk(">>>%s:%d\n", __func__, __LINE__);
+		return;
+	}
+
+	sprintf(buf, "%s", "naa.600140554cf3a18e");
+	ret = sys_write(fd, buf, strlen(buf));
+	if (ret <= 0)
+		printk(">>>%s:%d\n", __func__, __LINE__);
+}
+
 void hyper_gen_init(void)
 {
 	int pid;
-	struct task_struct *p;
 
 	pid = kernel_thread(hyper_gen_daemon, NULL, CLONE_FS | CLONE_FILES);
 	rcu_read_lock();
@@ -869,10 +959,15 @@ void hyper_gen_init(void)
 
 	check_hot_buddy();
 
+	//prepare hugepages
 	__nr_hugepages_store_common(0, &default_hstate, -1, 1024, 0);
+
+	//vhost target file
+	init_vhost_target_file();
 
 
 #if 0
+	struct task_struct *p;
 //	my_task_test = 1;
 	pid = kernel_thread(hyper_gen_vm_func, NULL, CLONE_FS | CLONE_FILES);
 //	my_task_test = 0;

@@ -66,6 +66,7 @@ int transport_backend_register(const struct target_backend_ops *ops)
 			return -EEXIST;
 		}
 	}
+
 	target_setup_backend_cits(tb);
 	list_add_tail(&tb->list, &backend_list);
 	mutex_unlock(&backend_mutex);
