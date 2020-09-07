@@ -210,7 +210,6 @@ static int hyper_gen_vser_tx_fn(void *opaque, char *buf, int len)
 
 static int start_vm_console(struct hyper_gen_tty_context *ctx, unsigned long vm_id)
 {
-	int ret;
 	//1. find vm with vm_id
 	struct kvm *kvm = find_kvm_by_id(vm_id);
 	if (!kvm) {
@@ -254,7 +253,7 @@ void list_fn(struct kvm *kvm, void *arg)
 	char tmp[32];
 	struct hyper_gen_tty_context *ctx = arg;
 
-	sprintf(tmp, "VMID: %d\n", kvm->id);
+	sprintf(tmp, "VMID: %llu\n", kvm->id);
 	sys_write(ctx->fd, (const char __user *)tmp, strlen(tmp));
 }
 
@@ -959,7 +958,7 @@ static void init_hyper_gen_bridge(void)
 	int err;
 	struct net_device *dev, *tmp, *phy_eth = NULL;
 	struct net_device *br;
-	struct net_device_ops *ops;
+	const struct net_device_ops *ops;
 	struct netlink_ext_ack extack;
 
 	//ip link set eth0 up. "ip=dhcp" has setup eth0 before.

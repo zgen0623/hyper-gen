@@ -283,24 +283,14 @@ static void *tap_open(char *ifname, int ifname_size, int *vnet_hdr,
     if (mq_required)
         ifr.ifr_flags |= IFF_MULTI_QUEUE;
 
-    if (ifname[0] != '\0') {
-        strlcpy(ifr.ifr_name, ifname, IFNAMSIZ);
-    } else {
-        strlcpy(ifr.ifr_name, "tap%d", IFNAMSIZ);
-	}
+    strlcpy(ifr.ifr_name, ifname, IFNAMSIZ);
 
 	ret = my_set_if(tap_priv, &ifr);
     if (ret != 0) {
-        if (ifname[0] != '\0') {
-			printk(">>>>>%s:%d\n",__func__, __LINE__);
-        } else {
-			printk(">>>>>%s:%d\n",__func__, __LINE__);
-        }
+		printk(">>>>>%s:%d\n",__func__, __LINE__);
 		my_tun_chr_close(tap_priv);
         return NULL;
     }
-
-    strlcpy(ifname, ifr.ifr_name, ifname_size);
 
     return tap_priv;
 }
@@ -420,14 +410,14 @@ fail:
     return;
 }
 
-static void my_net_client_init(VirtIONet *n, int mq_num)
+static void my_net_client_init(VirtIONet *n, int mq_num, uint64_t id)
 {   
     int vnet_hdr = 1, i = 0;
     char ifname[128];
     NetClientState *nc;
 	void *tap_priv;
 
-    strlcpy(ifname, IFNAME, sizeof ifname);
+	sprintf(ifname, "tap%llu", id);
 
     for (i = 0; i < mq_num; i++) {
         tap_priv = tap_open(ifname, sizeof(ifname), &vnet_hdr, mq_num > 1);
@@ -435,7 +425,6 @@ static void my_net_client_init(VirtIONet *n, int mq_num)
             printk(">>>>>%s:%d\n",__func__, __LINE__);
             return;
         }
-        //printk(">>>>>%s:%d tap_priv=%lx\n",__func__, __LINE__, tap_priv);
 
         nc = net_tap_init(n, tap_priv, vnet_hdr);
 
@@ -2275,7 +2264,7 @@ void create_vnet(struct kvm *kvm)
     if (NET_QUEUE_NUM > 1)
         n->host_features |= (1UL << VIRTIO_NET_F_MQ);
 
-    my_net_client_init(n, NET_QUEUE_NUM);
+    my_net_client_init(n, NET_QUEUE_NUM, kvm->id);
 
 
     //3. realize instance
