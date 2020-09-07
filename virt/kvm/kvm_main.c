@@ -635,7 +635,7 @@ void __weak kvm_arch_pre_destroy_vm(struct kvm *kvm)
 {
 }
 
-static struct kvm *kvm_create_vm(unsigned long type)
+static struct kvm *kvm_create_vm(unsigned long type, unsigned long image_id)
 {
 	int r, i;
 	static uint64_t kvm_id;
@@ -645,6 +645,7 @@ static struct kvm *kvm_create_vm(unsigned long type)
 		return NULL;
 
 	kvm->id = kvm_id++;
+	kvm->image_id = image_id;
 
 	spin_lock_init(&kvm->mmu_lock);
 //	mmgrab(current->mm);
@@ -3666,6 +3667,7 @@ static struct file_operations kvm_vm_fops = {
 //	.poll	= kvm_vm_poll,
 };
 
+#if 0
 static int kvm_dev_ioctl_create_vm(unsigned long type)
 {
 	int r;
@@ -3690,6 +3692,7 @@ static int kvm_dev_ioctl_create_vm(unsigned long type)
 	fd_install(r, file);
 	return r;
 }
+#endif
 
 
 
@@ -3978,6 +3981,7 @@ static int hyper_gen_vcpu_fn(void *opaque)
 	do_exit(0);
 }
 
+struct hyper_gen_image *find_image_by_id(unsigned long image_id);
 
 static void hyper_gen_create_vm(struct hyper_gen_work *work)
 {
@@ -3988,9 +3992,15 @@ static void hyper_gen_create_vm(struct hyper_gen_work *work)
 	CPUArchIdList *list;
 	struct hyper_gen_vm_work *vm_work =
 		container_of(work, struct hyper_gen_vm_work, work);
+	struct hyper_gen_image *img;
 
-	kvm = kvm_create_vm(0);
+	unsigned long image_id = (unsigned long)work->opaque;
+
+	kvm = kvm_create_vm(0, image_id);
 	if (!kvm) {
+		struct hyper_gen_image *img;
+		img = find_image_by_id(image_id);
+		img->used = false;
 		printk(">>>%s:%d fail to create vm!!!\n", __func__,__LINE__);
 //		vm_work->ret = -1;
 		goto out;
@@ -4034,7 +4044,7 @@ out:
 	kfree(vm_work);
 }
 
-int hyper_gen_create_vm_from_mgnt(void)
+int hyper_gen_create_vm_from_mgnt(unsigned long image_id)
 {
 	int r = 0;
 	struct hyper_gen_vm_work *vm_work =
@@ -4042,7 +4052,8 @@ int hyper_gen_create_vm_from_mgnt(void)
 
 	vm_work->work.flags = 0;
 	vm_work->work.fn = hyper_gen_create_vm;
-	vm_work->work.opaque = (void*)&vm_work->work;
+	vm_work->work.opaque = (void*)image_id;
+//	vm_work->arg = (void *)(uint64_t)image_id;
 //	atomic_set(&vm_work->done, 0);
 //	init_waitqueue_head(&vm_work->wq);
 
@@ -4100,10 +4111,10 @@ static void hyper_gen_destroy_vm_fn(struct hyper_gen_work *work)
 	long wait_ret;
 	struct kvm *kvm;
 	struct kvm_vcpu *vcpu;
-	struct hyper_gen_vm_work *vm_work =
-		container_of(work, struct hyper_gen_vm_work, work);
+//	struct hyper_gen_vm_work *vm_work =
+//		container_of(work, struct hyper_gen_vm_work, work);
 
-	kvm = vm_work->arg;
+	kvm = work->opaque;
 
 	kvm_for_each_vcpu(i, vcpu, kvm) {
 		struct cpu_state *cpu = vcpu->thread_state;
@@ -4142,8 +4153,8 @@ int hyper_gen_destroy_vm(unsigned long vm_id)
 		return 0;
 
 	vm_work->work.fn = hyper_gen_destroy_vm_fn;
-	vm_work->work.opaque = (void*)&vm_work->work;
-	vm_work->arg = (void*)kvm;
+	vm_work->work.opaque = (void*)kvm;
+//	vm_work->arg = (void*)kvm;
 
 	hyper_gen_commit_work(&vm_work->work);
 
@@ -4164,7 +4175,7 @@ static long kvm_dev_ioctl(struct file *filp,
 		break;
 	case KVM_CREATE_VM:
 //		r = kvm_dev_ioctl_create_vm(arg);
-		r = hyper_gen_create_vm_from_mgnt();
+//		r = hyper_gen_create_vm_from_mgnt();
 		break;
 	case KVM_CHECK_EXTENSION:
 		r = kvm_vm_ioctl_check_extension_generic(NULL, arg);

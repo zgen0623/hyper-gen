@@ -517,8 +517,16 @@ struct hyper_gen_vm_work {
 	wait_queue_head_t wq;
 	atomic_t done;
 	int ret;
-	void *arg;
+//	void *arg;
 };
+
+struct hyper_gen_image {
+	uint64_t id;
+	char naa_id[64];
+	struct list_head image_list;
+	bool used;
+};
+
 
 struct kvm {
 	spinlock_t mmu_lock;
@@ -593,6 +601,8 @@ struct kvm {
 
 	wait_queue_head_t wait_vcpu_thread_wq;
 	struct hyper_gen_vm_work vm_destroy_work;
+
+	unsigned long image_id;
 
 #if 0
 	struct gen_shm *gen_shm;

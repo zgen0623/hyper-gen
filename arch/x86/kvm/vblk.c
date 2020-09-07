@@ -336,6 +336,7 @@ static void vhost_scsi_unrealize(VirtIODevice *vdev)
     my_vhost_scsi_release(vs->dev.opaque);
 }
 
+struct hyper_gen_image *find_image_by_id(unsigned long image_id);
 
 void create_vblk(struct kvm *kvm)
 {
@@ -344,6 +345,13 @@ void create_vblk(struct kvm *kvm)
 	PCIDevice *pci_dev;
     VirtIODevice *vdev;
     VHostSCSI *vs;
+	struct hyper_gen_image *img;
+
+	img = find_image_by_id(kvm->image_id);
+	if (!img) {
+		printk(">>>%s:%d\n", __func__, __LINE__);;
+		return;
+	}
 
 	bridge = kvm->vdevices.vbridge;
 	if (!bridge) {
@@ -392,7 +400,7 @@ void create_vblk(struct kvm *kvm)
     vs->conf.max_sectors = 0xffff;
     vs->conf.virtqueue_size = 128;
     vs->conf.num_queues = 1;
-    vs->conf.wwpn = (char*)"naa.600140554cf3a18e";
+    vs->conf.wwpn = img->naa_id;
     vs->feature_bits = kernel_feature_bits;
 
     vdev->nvectors = vs->conf.num_queues + 3;
@@ -419,12 +427,16 @@ void destroy_vblk(struct kvm *kvm)
 	PCIDevice *pci_dev;
     VirtIODevice *vdev;
     VHostSCSI *vs;
+	struct hyper_gen_image *img;
 
 	vs = kvm->vdevices.vblock;
 	if (!vs) {
 		printk(">>>>%s:%d\n", __func__, __LINE__);
 		return;
 	}
+
+	img = find_image_by_id(kvm->image_id);
+	img->used = false;
 
 	vdev = &vs->parent_obj;
 	pci_dev = &vdev->pci_dev;
