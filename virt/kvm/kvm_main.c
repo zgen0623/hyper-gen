@@ -3975,7 +3975,7 @@ static int hyper_gen_vcpu_fn(void *opaque)
 	}
 
 	//4. vcpu thread exit
-	printk(">>>%s:%d cpu=%d\n", __func__, __LINE__, cpu->apic_id);
+	printk(">>>>>%s:%d vcpu_id=%d exit_cnt=%lx\n", __func__, __LINE__, vcpu->vcpu_id, vcpu->stat.exits);
 	kvm_put_kvm(kvm);
 	wake_up(&kvm->wait_vcpu_thread_wq);
 	do_exit(0);

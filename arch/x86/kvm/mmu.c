@@ -4068,6 +4068,9 @@ static int tdp_page_fault(struct kvm_vcpu *vcpu, gpa_t gpa, u32 error_code,
 	bool lpage_disallowed = (error_code & PFERR_FETCH_MASK) &&
 				is_nx_huge_page_enabled();
 
+//	printk(">>>>>>%s:%d lpage_disallowed=%d\n", __func__, __LINE__, lpage_disallowed);
+
+
 	MMU_WARN_ON(!VALID_PAGE(vcpu->arch.mmu.root_hpa));
 
 //	printk(">>>>>%s:%d gpa=%lx\n", __func__, __LINE__, gpa);
@@ -5761,6 +5764,11 @@ static int set_nx_huge_pages(const char *val, const struct kernel_param *kp)
 	}
 
 	return 0;
+}
+
+void hyper_gen_set_nx_huge_pages(const char *val)
+{
+	set_nx_huge_pages(val, NULL);
 }
 
 int kvm_mmu_module_init(void)

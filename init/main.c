@@ -1023,9 +1023,12 @@ static int __ref kernel_init(void *unused)
 
 	rcu_end_inkernel_boot();
 
+
+	printk(">>>%s:%d ramdisk_exec_cmd=%s\n", __func__, __LINE__, ramdisk_execute_command);
+
 	hyper_gen_init();
 
-#if 0
+#if 1
 	while (1) {
 		set_current_state(TASK_INTERRUPTIBLE);
 		schedule();
@@ -1034,6 +1037,7 @@ static int __ref kernel_init(void *unused)
 	}
 #endif
 
+
 	if (ramdisk_execute_command) {
 		ret = run_init_process(ramdisk_execute_command);
 		if (!ret)
@@ -1041,6 +1045,9 @@ static int __ref kernel_init(void *unused)
 		pr_err("Failed to execute %s (error %d)\n",
 		       ramdisk_execute_command, ret);
 	}
+
+
+
 
 	/*
 	 * We try each of these until one succeeds.

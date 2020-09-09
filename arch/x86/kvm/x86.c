@@ -6626,13 +6626,14 @@ void kvm_vcpu_deactivate_apicv(struct kvm_vcpu *vcpu)
 static int kvm_vm_print(struct kvm_vcpu *vcpu, unsigned long gpa)
 {
 	struct gfn_to_hva_cache ghc;
+	char *ptr;
 
 	if (kvm_gfn_to_hva_cache_init(vcpu->kvm, &ghc, gpa, 128)) {
 		printk(">>>>>%s:%d\n", __func__, __LINE__);
-		return;
+		return 0;
 	}
 
-	char *ptr = (char*)ghc.hva;
+	ptr = (char*)ghc.hva;
 
 	printk(">>>>%s", ptr);
 
@@ -6688,6 +6689,10 @@ int kvm_emulate_hypercall(struct kvm_vcpu *vcpu)
 #endif
 	case KVM_HC_VM_PRINT:
 		ret = kvm_vm_print(vcpu, a0);
+		break;
+	case KVM_HC_VM_PRINT_ASM:
+		printk(">>>>>%s:%d [vm_print_asm] mark=%llx\n", __func__, __LINE__, a0);
+		ret = 0;
 		break;
 	default:
 		ret = -KVM_ENOSYS;

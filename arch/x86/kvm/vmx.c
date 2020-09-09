@@ -2033,16 +2033,45 @@ static void update_exception_bitmap(struct kvm_vcpu *vcpu)
 {
 	u32 eb;
 
+#if 1
 	eb = (1u << PF_VECTOR) | (1u << UD_VECTOR) | (1u << MC_VECTOR) |
 	     (1u << DB_VECTOR) | (1u << AC_VECTOR);
+#endif
+#if 0
+	eb =
+		(1u << DE_VECTOR) |
+		(1u << DB_VECTOR) |
+		(1u << BP_VECTOR) |
+		(1u << OF_VECTOR) |
+		(1u << BR_VECTOR) |
+		(1u << UD_VECTOR) |
+		(1u << NM_VECTOR) |
+		(1u << DF_VECTOR) |
+		(1u << TS_VECTOR) |
+		(1u << NP_VECTOR) |
+		(1u << SS_VECTOR) |
+		(1u << GP_VECTOR) |
+		(1u << PF_VECTOR) |
+		(1u << MF_VECTOR) |
+		(1u << AC_VECTOR) |
+		(1u << MC_VECTOR) |
+		(1u << XM_VECTOR) |
+		(1u << VE_VECTOR)
+		;
+#endif
+
 	if ((vcpu->guest_debug &
 	     (KVM_GUESTDBG_ENABLE | KVM_GUESTDBG_USE_SW_BP)) ==
 	    (KVM_GUESTDBG_ENABLE | KVM_GUESTDBG_USE_SW_BP))
 		eb |= 1u << BP_VECTOR;
+
 	if (to_vmx(vcpu)->rmode.vm86_active)
 		eb = ~0;
+
+#if 1
 	if (enable_ept)
 		eb &= ~(1u << PF_VECTOR); /* bypass_guest_pf = 0 */
+#endif
 
 	/* When we are running a nested L2 guest and L1 specified for it a
 	 * certain exception bitmap, we must trap the same exceptions and pass
@@ -6300,6 +6329,8 @@ static int handle_exception(struct kvm_vcpu *vcpu)
 	vect_info = vmx->idt_vectoring_info;
 	intr_info = vmx->exit_intr_info;
 
+//	printk(">>>%s:%d intr_info=%lx\n", __func__, __LINE__, intr_info);
+
 	if (is_machine_check(intr_info))
 		return handle_machine_check(vcpu);
 
@@ -6339,6 +6370,10 @@ static int handle_exception(struct kvm_vcpu *vcpu)
 		cr2 = vmcs_readl(EXIT_QUALIFICATION);
 		/* EPT won't cause page fault directly */
 		WARN_ON_ONCE(!vcpu->arch.apf.host_apf_reason && enable_ept);
+
+//		printk(">>>%s:%d guest_cr2=%llx ec=%llx\n", __func__, __LINE__, cr2, error_code);
+//		kvm_make_request(KVM_REQ_TRIPLE_FAULT, vcpu);
+//		return 0;
 		return kvm_handle_page_fault(vcpu, error_code, cr2, NULL, 0);
 	}
 
@@ -6396,7 +6431,9 @@ static int handle_external_interrupt(struct kvm_vcpu *vcpu)
 
 static int handle_triple_fault(struct kvm_vcpu *vcpu)
 {
-	printk(">>>>>%s:%d\n", __func__, __LINE__);
+	uint64_t rip = kvm_rip_read(vcpu);
+
+	printk(">>>>>%s:%d vcpu_id=%d exit_cnt=%lx rip=%llx\n", __func__, __LINE__, vcpu->vcpu_id, vcpu->stat.exits, rip);
 	vcpu->run->exit_reason = KVM_EXIT_SHUTDOWN;
 	vcpu->mmio_needed = 0;
 	return 0;
@@ -6931,6 +6968,9 @@ static int handle_ept_violation(struct kvm_vcpu *vcpu)
 	       PFERR_GUEST_FINAL_MASK : PFERR_GUEST_PAGE_MASK;
 
 	vcpu->arch.exit_qualification = exit_qualification;
+
+//	printk(">>>>>>%s:%d vcpu=%d gpa=%llx ec=%llx eq=%llx\n", __func__, __LINE__,vcpu->vcpu_id, gpa, error_code, exit_qualification );
+
 	return kvm_mmu_page_fault(vcpu, gpa, error_code, NULL, 0);
 }
 
@@ -9129,6 +9169,7 @@ static int vmx_handle_exit(struct kvm_vcpu *vcpu)
 
 	trace_kvm_exit(exit_reason, vcpu, KVM_ISA_VMX);
 
+//	printk(">>>>>>%s:%d vcpu=%d reasion=%d\n", __func__, __LINE__,vcpu->vcpu_id, exit_reason);
 	/*
 	 * Flush logged GPAs PML buffer, this will make dirty_bitmap more
 	 * updated. Another good is, in kvm_vm_ioctl_get_dirty_log, before
@@ -9206,7 +9247,6 @@ static int vmx_handle_exit(struct kvm_vcpu *vcpu)
 		}
 	}
 
-//	printk(">>>>>>%s:%d vcpu=%d reasion=%d\n", __func__, __LINE__,vcpu->vcpu_id, exit_reason);
 
 	if (exit_reason < kvm_vmx_max_exit_handlers
 	    && kvm_vmx_exit_handlers[exit_reason])

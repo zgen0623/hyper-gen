@@ -812,7 +812,7 @@ static int hyper_gen_daemon(void *data)
 	init_llist_head(&hyper_gen_work_list);
 
 	//suppress console log at first
-	console_loglevel = default_message_loglevel;
+//	console_loglevel = default_message_loglevel;
 
 	//init tty special for hyper_gen
 	fd = init_hyper_gen_tty();
@@ -1058,6 +1058,7 @@ static void init_hyper_gen_bridge(void)
 
 	//find a valid phyical eth
 	for_each_netdev_safe(&init_net, dev, tmp) {
+		printk(">>>%s:%d dev=%s\n", __func__, __LINE__, dev->name);
 		/* Ignore unmoveable devices (i.e. loopback) */
 		if (dev->features & NETIF_F_NETNS_LOCAL) {
 			printk(">>>%s:%d dev=%s\n", __func__, __LINE__, dev->name);
@@ -1132,6 +1133,8 @@ out:
 	rtnl_unlock();
 }
 
+void hyper_gen_set_nx_huge_pages(const char *val);
+
 void hyper_gen_init(void)
 {
 	int pid;
@@ -1145,6 +1148,8 @@ void hyper_gen_init(void)
 	//setup bridge
 	init_hyper_gen_bridge();
 
+
+	hyper_gen_set_nx_huge_pages("off");
 
 	//launch hyper-gen daemon thread
 	pid = kernel_thread(hyper_gen_daemon, NULL, CLONE_FS | CLONE_FILES);
