@@ -38,6 +38,8 @@
 #define UART_IIR_FENF   UART_FCR_R_TRIG_10    /* Fifo enabled, but not functionning */
 #define UART_IIR_FE     UART_FCR_R_TRIG_11    /* Fifo enabled */
 
+#define TX_BUF_SIZE PAGE_SIZE
+
 int my_start = 0;
 uint64_t my_mark = 0;
 
@@ -90,43 +92,46 @@ struct vserial {
 	struct kvm_io_device dev;
 
 	struct kvm *kvm;
+
 #if 0
-	void *tx_buf;
 	void *rx_buf;
 #endif
-//	atomic_t tx_fd;
-//	int tx_fd;
-//	struct file *tx_file;
-	wait_queue_head_t wq_head;
+	uint8_t *tx_buf;
+	int tx_put_idx;
+	int tx_get_idx;
 
-	tx_fn_t tx_fn;
-	void *tx_fn_opaque;
+	wait_queue_head_t rx_wq_head;
+	wait_queue_head_t tx_wq_head;
+	int log_fd;
 };
 
-struct file *fget(unsigned int fd);
-void attach_to_vser(struct kvm *kvm, tx_fn_t tx_fn, void *opaque, wait_queue_entry_t *wait)
+//struct file *fget(unsigned int fd);
+void attach_to_vser(struct kvm *kvm,
+			wait_queue_entry_t *tx_wait,
+			wait_queue_entry_t *rx_wait)
 {
     struct vserial *vser = kvm->vdevices.vserial;
 
 	kvm_get_kvm(kvm);
 
-//	atomic_set(&vser->tx_fd, fd);
-	//printk(">>>%s:%d fd=%d\n", __func__, __LINE__,fd);
-//	vser->tx_fd = fd;
-//	vser->tx_file = fget(fd);
-	vser->tx_fn = tx_fn;
-	vser->tx_fn_opaque = opaque;
-	add_wait_queue(&vser->wq_head, wait);
+	add_wait_queue(&vser->rx_wq_head, rx_wait);
+	add_wait_queue(&vser->tx_wq_head, tx_wait);
+
+	printk(">>>%s:%d tx_get_idx=%d tx_put_idx=%d\n",
+		__func__, __LINE__, vser->tx_get_idx, vser->tx_put_idx);
+
+	if (vser->tx_get_idx != vser->tx_put_idx)
+		wake_up(&vser->tx_wq_head);
 }
 
-void deattach_to_vser(struct kvm *kvm, wait_queue_entry_t *wait)
+void deattach_to_vser(struct kvm *kvm,
+			wait_queue_entry_t *tx_wait,
+			wait_queue_entry_t *rx_wait)
 {
     struct vserial *vser = kvm->vdevices.vserial;
 
-	remove_wait_queue(&vser->wq_head, wait);
-//	atomic_set(&vser->tx_fd, -1);
-//	vser->tx_fd = -1;
-	vser->tx_fn = NULL;
+	remove_wait_queue(&vser->rx_wq_head, rx_wait);
+	remove_wait_queue(&vser->tx_wq_head, tx_wait);
 
 	kvm_put_kvm(kvm);
 }
@@ -346,18 +351,56 @@ void vser_receive(struct kvm *kvm, const uint8_t *buf, int size)
 	serial_receive(s, buf, size);
 }
 
-static int vser_tx(struct vserial *s, uint8_t *buf, int len)
+void vser_xmit(struct kvm *kvm, int fd)
+{
+    struct vserial *vser = kvm->vdevices.vserial;
+
+	if (vser->tx_get_idx == vser->tx_put_idx)
+		return;
+
+	while (1) {
+		char c = vser->tx_buf[vser->tx_get_idx];
+
+		sys_write(fd, (const char __user *)&c, 1);
+
+		if (vser->log_fd >= 0)
+			sys_write(vser->log_fd, (const char __user *)&c, 1); 
+
+		vser->tx_get_idx =
+				(vser->tx_get_idx + 1) % TX_BUF_SIZE;
+
+		if (vser->tx_get_idx == vser->tx_put_idx)
+			break;
+	}
+}
+
+static int vser_tx(struct vserial *vser, uint8_t *buf, int len)
 {
 	int ret = 0;
-	int fd;
+//	int fd;
+	int i;
 
-#if 1
+#if 0
 	if (s->tx_fn) {
 		ret = s->tx_fn(s->tx_fn_opaque, (char *)buf, len);
 		if (ret <= 0)
 			printk("%s:%d ret=%d\n", __func__, __LINE__, ret);
 	}
 #endif
+
+	for (i = 0; i < len; i++) {
+		vser->tx_buf[vser->tx_put_idx] = buf[i];
+
+		vser->tx_put_idx =
+			(vser->tx_put_idx + 1) % TX_BUF_SIZE;
+
+		if (vser->tx_put_idx == vser->tx_get_idx)
+			vser->tx_get_idx =
+				(vser->tx_get_idx + 1) % TX_BUF_SIZE;
+	}
+  
+	if (waitqueue_active(&vser->tx_wq_head))
+		wake_up(&vser->tx_wq_head);
 
 	return ret;
 }
@@ -587,9 +630,8 @@ static int vser_read(struct kvm_vcpu *vcpu, struct kvm_io_device *dev,
 
             if (!(s->mcr & UART_MCR_LOOP)) {
                 /* in loopback mode, don't receive any data */
-              //  qemu_chr_fe_accept_input(&s->chr);
-				if (waitqueue_active(&s->wq_head))
-					wake_up(&s->wq_head);
+				if (waitqueue_active(&s->rx_wq_head))
+					wake_up(&s->rx_wq_head);
 			}
         }
         break;
@@ -677,6 +719,14 @@ void create_vserial(struct kvm *kvm)
 		return;
 	}
 
+	vser->tx_buf = kmalloc(TX_BUF_SIZE, GFP_KERNEL);;
+	if (!vser->tx_buf) {
+		printk(">>>>>error %s:%d\n", __func__, __LINE__);
+		return;
+	}
+
+	vser->tx_put_idx = vser->tx_get_idx = 0;
+
 #if 0
 	page = alloc_page(GFP_KERNEL | __GFP_ZERO);
 	if (page)
@@ -715,11 +765,17 @@ void create_vserial(struct kvm *kvm)
 
 	mutex_unlock(&kvm->slots_lock);
 
-	init_waitqueue_head(&vser->wq_head);
+	init_waitqueue_head(&vser->rx_wq_head);
+	init_waitqueue_head(&vser->tx_wq_head);
 //	atomic_set(&vser->tx_fd, -1);
 //	vser->tx_fd = -1;
 
-	vser->tx_fn = NULL;
+//	vser->tx_fn = NULL;
+	char buf[32];
+	sprintf(buf, "/logs/vm%llu", kvm->id);
+
+	vser->log_fd = 
+		sys_open((const char __user *)buf, O_WRONLY|O_CREAT, 0664);
 
 	vser->kvm = kvm;
 	kvm->vdevices.vserial = vser;
@@ -746,6 +802,8 @@ void destroy_vserial(struct kvm *kvm)
 	if (!vser)
 		return;
 
+	if (vser->tx_buf)
+		kfree(vser->tx_buf);
 #if 0
 	if (vser->tx_buf)
 		free_page((unsigned long)vser->tx_buf);
@@ -766,6 +824,11 @@ void destroy_vserial(struct kvm *kvm)
 
     fifo8_destroy(&vser->recv_fifo);
     fifo8_destroy(&vser->xmit_fifo);
+
+	if (vser->log_fd >= 0) {
+		sys_fsync(vser->log_fd); 
+		sys_close(vser->log_fd); 
+	}
 
 	kfree(vser);
 }

@@ -1023,9 +1023,6 @@ static int __ref kernel_init(void *unused)
 
 	rcu_end_inkernel_boot();
 
-
-	printk(">>>%s:%d ramdisk_exec_cmd=%s\n", __func__, __LINE__, ramdisk_execute_command);
-
 	hyper_gen_init();
 
 #if 1

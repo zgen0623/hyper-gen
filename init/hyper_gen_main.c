@@ -135,8 +135,7 @@
 #define BS      CTL('H')    /* back space */
 #define DEL     CTL('?')    /* delete */
 
-
-typedef int (*tx_fn_t)(void *opaque, char *buf, int len);
+//typedef int (*tx_fn_t)(void *opaque, char *buf, int len);
 
 struct hyper_gen_poll {
 	poll_table table;
@@ -159,22 +158,20 @@ struct hyper_gen_tty_context {
 	int vser_rx_put_index;
 	int vser_rx_get_index;
 
-	char vser_tx_buf[1024];
-	int vser_tx_put_index;
-	int vser_tx_get_index;
-
 	int fd;
 	enum tty_ctx_type context_type;
 	struct termios tp;
 	struct kvm *kvm;
-	wait_queue_entry_t wait;
+
+	wait_queue_entry_t vser_rx_wait;
+	wait_queue_entry_t vser_tx_wait;
 	struct hyper_gen_work vser_rx_work;
 	struct hyper_gen_work vser_tx_work;
 };
 
 struct kvm *find_kvm_by_id(uint64_t kvm_id);
-void attach_to_vser(struct kvm *kvm, tx_fn_t tx_fn, void *opaque, wait_queue_entry_t *wait);
-void deattach_to_vser(struct kvm *kvm, wait_queue_entry_t *wait);
+void attach_to_vser(struct kvm *kvm, wait_queue_entry_t *tx_wait, wait_queue_entry_t *rx_wait);
+void deattach_to_vser(struct kvm *kvm, wait_queue_entry_t *tx_wait, wait_queue_entry_t *rx_wait);
 int vser_can_receive(struct kvm *kvm);
 void vser_receive(struct kvm *kvm, const uint8_t *buf, int size);
 static void handle_vser_rx(struct hyper_gen_work *work);
@@ -185,10 +182,11 @@ int hyper_gen_flush_eth_dev(struct net_device *dev);
 ssize_t __nr_hugepages_store_common(bool obey_mempolicy,
 					   struct hstate *h, int nid,
 					   unsigned long count, size_t len);
-
+void check_hot_buddy(void);
+void hyper_gen_set_nx_huge_pages(const char *val);
+void vser_xmit(struct kvm *kvm, int fd);
 
 extern struct rtnl_link_ops br_link_ops;
-
 
 static struct task_struct *hyper_gen_console_worker;
 static struct llist_head hyper_gen_work_list;
@@ -198,32 +196,82 @@ static DEFINE_MUTEX(image_lock);
 static LIST_HEAD(image_list);
 static uint64_t glb_image_cnt = 1;
 
+int my_task_test = 0;
+
 void hyper_gen_commit_work(struct hyper_gen_work *work)
 {
 	llist_add(&work->node, &hyper_gen_work_list);
 	wake_up_process(hyper_gen_console_worker);
 }
 
-static int hyper_gen_vser_tx_fn(void *opaque, char *buf, int len)
+
+static void handle_vser_rx(struct hyper_gen_work *work)
 {
 	int i;
-	struct hyper_gen_tty_context *ctx = opaque;
+	int ret;
+	struct hyper_gen_tty_context *ctx = work->opaque;
 
-	for (i = 0; i < len; i++) {
-		ctx->vser_tx_buf[ctx->vser_tx_put_index] = buf[i];
+	if (!ctx->kvm)
+		return;
 
-		ctx->vser_tx_put_index =
-			(ctx->vser_tx_put_index + 1) % sizeof(ctx->vser_tx_buf);
+	if (ctx->vser_rx_get_index == ctx->vser_rx_put_index)
+		return;
 
-		if (ctx->vser_tx_put_index == ctx->vser_tx_get_index)
-			ctx->vser_tx_get_index =
-				(ctx->vser_tx_get_index + 1) % sizeof(ctx->vser_tx_buf);
+	while (1) {
+		ret = vser_can_receive(ctx->kvm);
+		if (!ret)
+			break;
+
+		for (i = 0; i < ret; i++) {
+			vser_receive(ctx->kvm, 
+				(const uint8_t *)&ctx->vser_rx_buf[ctx->vser_rx_get_index], 1);
+
+			ctx->vser_rx_get_index =
+				(ctx->vser_rx_get_index + 1) % sizeof(ctx->vser_rx_buf);
+
+			if (ctx->vser_rx_get_index == ctx->vser_rx_put_index)
+				goto out;
+		}
 	}
+
+out:
+	return;
+}
+
+static int vser_ready_rx(wait_queue_entry_t *wait, unsigned mode, int sync,
+			     void *key)
+{
+	struct hyper_gen_tty_context *ctx =
+		container_of(wait, struct hyper_gen_tty_context, vser_rx_wait);
+
+	if (ctx->vser_rx_put_index == ctx->vser_rx_get_index)
+ 		return 0;
+
+	if (!test_and_set_bit(WORK_PENDING, &ctx->vser_rx_work.flags))
+		hyper_gen_commit_work(&ctx->vser_rx_work);
+
+	return 0;
+}
+
+static void handle_vser_tx(struct hyper_gen_work *work)
+{
+	struct hyper_gen_tty_context *ctx = work->opaque;
+
+	vser_xmit(ctx->kvm, ctx->fd);
+
+	return;
+}
+
+static int vser_ready_tx(wait_queue_entry_t *wait, unsigned mode, int sync,
+			     void *key)
+{
+	struct hyper_gen_tty_context *ctx =
+		container_of(wait, struct hyper_gen_tty_context, vser_tx_wait);
 
 	if (!test_and_set_bit(WORK_PENDING, &ctx->vser_tx_work.flags))
 		hyper_gen_commit_work(&ctx->vser_tx_work);
 
-	return len;
+	return 0;
 }
 
 static int start_vm_console(struct hyper_gen_tty_context *ctx, unsigned long vm_id)
@@ -236,7 +284,7 @@ static int start_vm_console(struct hyper_gen_tty_context *ctx, unsigned long vm_
 	}
 
 	//2. hook fd to vserial tx
-	attach_to_vser(kvm, hyper_gen_vser_tx_fn, ctx, &ctx->wait);
+	attach_to_vser(kvm, &ctx->vser_tx_wait, &ctx->vser_rx_wait);
 	ctx->kvm = kvm;
 
 	ctx->context_type = VM_GEN;
@@ -253,6 +301,29 @@ static int start_vm_console(struct hyper_gen_tty_context *ctx, unsigned long vm_
 
 	return 0;
 }
+
+static void stop_vm_console(struct hyper_gen_tty_context *ctx)
+{
+	//1. dishook fd to vserial tx
+	deattach_to_vser(ctx->kvm, &ctx->vser_tx_wait, &ctx->vser_rx_wait);
+
+	ctx->kvm = NULL;
+	ctx->context_type = HYPER_GEN;
+
+	ctx->vser_rx_get_index = ctx->vser_rx_put_index = 0;
+
+#if 0
+	//2. turn on tty echo 
+    ctx->tp.c_lflag |= ECHO;
+	ret = sys_ioctl(ctx->fd, TCSETSW, (const __user unsigned long)&ctx->tp);
+	if (0 > ret) {
+		printk(">>>%s:%d\n", __func__, __LINE__);
+		return;
+	}
+#endif
+}
+
+
 
 struct hyper_gen_image *find_image_by_id(unsigned long image_id)
 {
@@ -371,6 +442,12 @@ static bool parse_cmd(struct hyper_gen_tty_context *ctx)
 	} else if (!strcmp(param, "image_list")) {
 		list_hyper_gen_image(ctx);
 		return true;
+	} else if (!strcmp(param, "host_reboot")) {
+		kernel_restart(NULL);
+		return true;
+	} else if (!strcmp(param, "host_shutdown")) {
+		kernel_power_off();
+		return true;
 	} else {
 		sprintf(tmp, "%s\n", "Invalid Cmd");
 		goto fail;
@@ -383,28 +460,6 @@ fail_val:
 fail:
 	sys_write(ctx->fd, (const char __user *)tmp, strlen(tmp));
 	return true;
-}
-
-static void stop_vm_console(struct hyper_gen_tty_context *ctx)
-{
-	//1. dishook fd to vserial tx
-	deattach_to_vser(ctx->kvm, &ctx->wait);
-
-	ctx->kvm = NULL;
-	ctx->context_type = HYPER_GEN;
-
-	ctx->vser_rx_get_index = ctx->vser_rx_put_index = 0;
-	ctx->vser_tx_get_index = ctx->vser_tx_put_index = 0;
-
-#if 0
-	//2. turn on tty echo 
-    ctx->tp.c_lflag |= ECHO;
-	ret = sys_ioctl(ctx->fd, TCSETSW, (const __user unsigned long)&ctx->tp);
-	if (0 > ret) {
-		printk(">>>%s:%d\n", __func__, __LINE__);
-		return;
-	}
-#endif
 }
 
 static bool dump_to_vm(struct hyper_gen_tty_context *ctx)
@@ -499,77 +554,6 @@ static void handle_tty_rx(struct hyper_gen_work *work)
 
 	ctx->put_index = 0;
 }
- 
-
-static int vser_ready_rx(wait_queue_entry_t *wait, unsigned mode, int sync,
-			     void *key)
-{
-	struct hyper_gen_tty_context *ctx =
-		container_of(wait, struct hyper_gen_tty_context, wait);
-
-	if (ctx->vser_rx_put_index == ctx->vser_rx_get_index)
- 		return 0;
-
-	if (!test_and_set_bit(WORK_PENDING, &ctx->vser_rx_work.flags))
-		hyper_gen_commit_work(&ctx->vser_rx_work);
-
-	return 0;
-}
-
-static void handle_vser_rx(struct hyper_gen_work *work)
-{
-	int i;
-	int ret;
-	struct hyper_gen_tty_context *ctx = work->opaque;
-
-	if (!ctx->kvm)
-		return;
-
-	if (ctx->vser_rx_get_index == ctx->vser_rx_put_index)
-		return;
-
-	while (1) {
-		ret = vser_can_receive(ctx->kvm);
-		if (!ret)
-			break;
-
-		for (i = 0; i < ret; i++) {
-			vser_receive(ctx->kvm, 
-				(const uint8_t *)&ctx->vser_rx_buf[ctx->vser_rx_get_index], 1);
-
-			ctx->vser_rx_get_index =
-				(ctx->vser_rx_get_index + 1) % sizeof(ctx->vser_rx_buf);
-
-			if (ctx->vser_rx_get_index == ctx->vser_rx_put_index)
-				goto out;
-		}
-	}
-
-out:
-	return;
-}
-
-static void handle_vser_tx(struct hyper_gen_work *work)
-{
-	struct hyper_gen_tty_context *ctx = work->opaque;
-
-	if (ctx->vser_tx_get_index == ctx->vser_tx_put_index)
-		return;
-
-	while (1) {
-		char c = ctx->vser_tx_buf[ctx->vser_tx_get_index];
-
-		sys_write(ctx->fd, (const char __user *)&c, 1);
-
-		ctx->vser_tx_get_index =
-				(ctx->vser_tx_get_index + 1) % sizeof(ctx->vser_tx_buf);
-
-		if (ctx->vser_tx_get_index == ctx->vser_tx_put_index)
-			break;
-	}
-
-	return;
-}
 
 static int init_tty_ctx(struct hyper_gen_tty_context *ctx, int fd)
 {
@@ -580,15 +564,15 @@ static int init_tty_ctx(struct hyper_gen_tty_context *ctx, int fd)
 	ctx->vser_rx_put_index = 0;
 	ctx->vser_rx_get_index = 0;
 
-	ctx->vser_tx_put_index = 0;
-	ctx->vser_tx_get_index = 0;
-
 	ctx->fd = fd; 
 	ctx->context_type = HYPER_GEN;
 	ctx->kvm = NULL;
 
-	INIT_LIST_HEAD(&ctx->wait.entry);
-	init_waitqueue_func_entry(&ctx->wait, vser_ready_rx);
+	INIT_LIST_HEAD(&ctx->vser_rx_wait.entry);
+	init_waitqueue_func_entry(&ctx->vser_rx_wait, vser_ready_rx);
+
+	INIT_LIST_HEAD(&ctx->vser_tx_wait.entry);
+	init_waitqueue_func_entry(&ctx->vser_tx_wait, vser_ready_tx);
 
 	ctx->vser_rx_work.flags = 0;
 	ctx->vser_rx_work.fn = handle_vser_rx;
@@ -856,11 +840,6 @@ static int hyper_gen_daemon(void *data)
 
 
 
-
-
-void check_hot_buddy(void);
-
-int my_task_test = 0;
 
 
 #if 0
@@ -1133,8 +1112,6 @@ out:
 	rtnl_unlock();
 }
 
-void hyper_gen_set_nx_huge_pages(const char *val);
-
 void hyper_gen_init(void)
 {
 	int pid;
@@ -1148,7 +1125,7 @@ void hyper_gen_init(void)
 	//setup bridge
 	init_hyper_gen_bridge();
 
-
+	//disable nx_huge_pages
 	hyper_gen_set_nx_huge_pages("off");
 
 	//launch hyper-gen daemon thread
