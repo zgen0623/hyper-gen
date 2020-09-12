@@ -2642,7 +2642,7 @@ void register_console(struct console *newcon)
 	struct console_cmdline *c;
 	static bool has_preferred;
 
-	dump_stack();
+//	dump_stack();
 	printk(">>>%s:%d con=%s read=%lx\n", __func__, __LINE__, newcon->name, newcon->read);
 
 	if (console_drivers)
