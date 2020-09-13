@@ -1175,7 +1175,7 @@ void hyper_gen_init(void)
 	init_hyper_gen_bridge();
 
 	//disable nx_huge_pages
-	hyper_gen_set_nx_huge_pages("off");
+//	hyper_gen_set_nx_huge_pages("off");
 
 	//launch hyper-gen daemon thread
 	pid = kernel_thread(hyper_gen_daemon, NULL, CLONE_FS | CLONE_FILES);

@@ -5776,7 +5776,8 @@ int kvm_mmu_module_init(void)
 	int ret = -ENOMEM;
 
 	if (nx_huge_pages == -1)
-		__set_nx_huge_pages(get_nx_auto_mode());
+//		__set_nx_huge_pages(get_nx_auto_mode());
+		__set_nx_huge_pages(0);
 
 	kvm_mmu_reset_all_pte_masks();
 
