@@ -2488,9 +2488,8 @@ void kvm_vcpu_block(struct kvm_vcpu *vcpu)
 		} while (single_task_running() && ktime_before(cur, stop));
 	}
 
-		vcpu->vcpu_debug_mark |= 1<<15;
 	kvm_arch_vcpu_blocking(vcpu);
-		vcpu->vcpu_debug_mark |= 1<<16;
+
 
 	for (;;) {
 		prepare_to_swait(&vcpu->wq, &wait, TASK_INTERRUPTIBLE);
@@ -2501,7 +2500,6 @@ void kvm_vcpu_block(struct kvm_vcpu *vcpu)
 		waited = true;
 		schedule();
 	}
-		vcpu->vcpu_debug_mark |= 1<<17;
 
 	finish_swait(&vcpu->wq, &wait);
 	cur = ktime_get();
@@ -3936,11 +3934,15 @@ static void kvm_cpu_exec(struct cpu_state *cpu)
     return;
 }
 
+extern void fpu__clear(struct fpu *fpu);
+
 static int hyper_gen_vcpu_fn(void *opaque)
 {
 	struct cpu_state *cpu = opaque;
 	struct kvm *kvm = cpu->kvm;
 	struct kvm_vcpu *vcpu;
+
+	fpu__clear(&current->thread.fpu);
 
 	//1. create vcpu
 	vcpu = hyper_gen_create_vcpu(kvm, cpu->apic_id);

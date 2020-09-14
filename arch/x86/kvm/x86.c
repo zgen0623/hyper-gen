@@ -2321,6 +2321,11 @@ static int kvm_pv_enable_async_pf(struct kvm_vcpu *vcpu, u64 data)
 					sizeof(u32)))
 		return 1;
 
+	printk(">>>%s:%d %d %d vcpu_id=%d\n", __func__, __LINE__,
+		vcpu->arch.apf.send_user_only,
+		vcpu->arch.apf.delivery_as_pf_vmexit,
+		vcpu->vcpu_id);
+
 	vcpu->arch.apf.send_user_only = !(data & KVM_ASYNC_PF_SEND_ALWAYS);
 	vcpu->arch.apf.delivery_as_pf_vmexit = data & KVM_ASYNC_PF_DELIVERY_AS_PF_VMEXIT;
 	kvm_async_pf_wakeup_all(vcpu);
@@ -7477,22 +7482,21 @@ out:
 
 static inline int vcpu_block(struct kvm *kvm, struct kvm_vcpu *vcpu)
 {
+#if 1
 	if (!kvm_arch_vcpu_runnable(vcpu) &&
 	    (!kvm_x86_ops->pre_block || kvm_x86_ops->pre_block(vcpu) == 0)) {
 
-		vcpu->vcpu_debug_mark |= 1<<12;
 		srcu_read_unlock(&kvm->srcu, vcpu->srcu_idx);
 		kvm_vcpu_block(vcpu);
 		vcpu->srcu_idx = srcu_read_lock(&kvm->srcu);
-		vcpu->vcpu_debug_mark |= 1<<13;
 
 		if (kvm_x86_ops->post_block)
 			kvm_x86_ops->post_block(vcpu);
-		vcpu->vcpu_debug_mark |= 1<<14;
 
 		if (!kvm_check_request(KVM_REQ_UNHALT, vcpu))
 			return 1;
 	}
+#endif
 
 	kvm_apic_accept_events(vcpu);
 	switch(vcpu->arch.mp_state) {
@@ -7530,28 +7534,17 @@ static int vcpu_run(struct kvm_vcpu *vcpu)
 	vcpu->arch.l1tf_flush_l1d = true;
 
 	for (;;) {
-		vcpu->vcpu_debug_mark = 0;
-
-		if (kvm_vcpu_running(vcpu)) {
-			vcpu->vcpu_debug_mark |= 1<<0;
+		if (kvm_vcpu_running(vcpu))
 			r = vcpu_enter_guest(vcpu);
-		} else {
-			vcpu->vcpu_debug_mark |= 1<<1;
+		else
 			r = vcpu_block(kvm, vcpu);
-		}
-
-		vcpu->vcpu_debug_mark |= 1<<2;
 
 		if (r <= 0 || vcpu->run->immediate_exit)
 			break;
 
-		vcpu->vcpu_debug_mark |= 1<<3;
-
 		kvm_clear_request(KVM_REQ_PENDING_TIMER, vcpu);
-		if (kvm_cpu_has_pending_timer(vcpu)) {
-			vcpu->vcpu_debug_mark |= 1<<4;
+		if (kvm_cpu_has_pending_timer(vcpu))
 			kvm_inject_pending_timer_irqs(vcpu);
-		}
 
 	//No DM in hyper-gen
 #if 0
@@ -7564,10 +7557,12 @@ static int vcpu_run(struct kvm_vcpu *vcpu)
 		}
 #endif
 
+	//No async pf in hyper-gen
 		kvm_check_async_pf_completion(vcpu);
 
-		vcpu->vcpu_debug_mark |= 1<<5;
 
+	//No signal in hyper-gen vcpu thread
+#if 0
 		if (signal_pending(current)) {
 			vcpu->vcpu_debug_mark |= 1<<6;
 			r = -EINTR;
@@ -7575,16 +7570,13 @@ static int vcpu_run(struct kvm_vcpu *vcpu)
 			++vcpu->stat.signal_exits;
 			break;
 		}
-		vcpu->vcpu_debug_mark |= 1<<7;
+#endif
 
 		if (need_resched()) {
-			vcpu->vcpu_debug_mark |= 1<<8;
 			srcu_read_unlock(&kvm->srcu, vcpu->srcu_idx);
 			cond_resched();
 			vcpu->srcu_idx = srcu_read_lock(&kvm->srcu);
 		}
-
-		vcpu->vcpu_debug_mark |= 1<<9;
 	}
 
 	srcu_read_unlock(&kvm->srcu, vcpu->srcu_idx);
@@ -7699,6 +7691,7 @@ int kvm_arch_vcpu_ioctl_run(struct kvm_vcpu *vcpu, struct kvm_run *kvm_run)
 		goto out;
 	}
 
+#if 0
 	if (unlikely(vcpu->arch.complete_userspace_io)) {
 		int (*cui)(struct kvm_vcpu *) = vcpu->arch.complete_userspace_io;
 		vcpu->arch.complete_userspace_io = NULL;
@@ -7707,6 +7700,7 @@ int kvm_arch_vcpu_ioctl_run(struct kvm_vcpu *vcpu, struct kvm_run *kvm_run)
 			goto out;
 	} else
 		WARN_ON(vcpu->arch.pio.count || vcpu->mmio_needed);
+#endif
 
 
 	if (kvm_run->immediate_exit)
@@ -9049,6 +9043,7 @@ int kvm_arch_vcpu_runnable(struct kvm_vcpu *vcpu)
 	return kvm_vcpu_running(vcpu) || kvm_vcpu_has_events(vcpu);
 }
 
+
 bool kvm_arch_dy_runnable(struct kvm_vcpu *vcpu)
 {
 	if (READ_ONCE(vcpu->arch.pv.pv_unhalted))
@@ -9248,6 +9243,7 @@ void kvm_arch_async_page_present(struct kvm_vcpu *vcpu,
 		work->arch.token = ~0; /* broadcast wakeup */
 	else
 		kvm_del_async_pf_gfn(vcpu, work->arch.gfn);
+
 	trace_kvm_async_pf_ready(work->arch.token, work->cr2_or_gpa);
 
 	if (vcpu->arch.apf.msr_val & KVM_ASYNC_PF_ENABLED &&
@@ -9271,6 +9267,7 @@ void kvm_arch_async_page_present(struct kvm_vcpu *vcpu,
 			kvm_inject_page_fault(vcpu, &fault);
 		}
 	}
+
 	vcpu->arch.apf.halted = false;
 	vcpu->arch.mp_state = KVM_MP_STATE_RUNNABLE;
 }

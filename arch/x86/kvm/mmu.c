@@ -3949,6 +3949,7 @@ static int nonpaging_page_fault(struct kvm_vcpu *vcpu, gpa_t gpa,
 			     error_code, gfn, prefault);
 }
 
+#if 0
 static int kvm_arch_setup_async_pf(struct kvm_vcpu *vcpu, gpa_t cr2_or_gpa,
 				   gfn_t gfn)
 {
@@ -3962,6 +3963,7 @@ static int kvm_arch_setup_async_pf(struct kvm_vcpu *vcpu, gpa_t cr2_or_gpa,
 	return kvm_setup_async_pf(vcpu, cr2_or_gpa,
 				  kvm_vcpu_gfn_to_hva(vcpu, gfn), &arch);
 }
+#endif
 
 bool kvm_can_do_async_pf(struct kvm_vcpu *vcpu)
 {

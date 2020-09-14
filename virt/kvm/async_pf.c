@@ -69,6 +69,7 @@ void kvm_async_pf_vcpu_init(struct kvm_vcpu *vcpu)
 	spin_lock_init(&vcpu->async_pf.lock);
 }
 
+#if 0
 static void async_pf_execute(struct work_struct *work)
 {
 	struct kvm_async_pf *apf =
@@ -112,6 +113,7 @@ static void async_pf_execute(struct work_struct *work)
 	mmput(mm);
 	kvm_put_kvm(vcpu->kvm);
 }
+#endif
 
 void kvm_clear_async_pf_completion_queue(struct kvm_vcpu *vcpu)
 {
@@ -137,7 +139,6 @@ void kvm_clear_async_pf_completion_queue(struct kvm_vcpu *vcpu)
 #else
 		if (cancel_work_sync(&work->work)) {
 			mmput(work->mm);
-			printk(">>>>>%s:%d put \n", __func__, __LINE__);
 			kvm_put_kvm(vcpu->kvm); /* == work->vcpu->kvm */
 			kmem_cache_free(async_pf_cache, work);
 		}
@@ -178,6 +179,7 @@ void kvm_check_async_pf_completion(struct kvm_vcpu *vcpu)
 	}
 }
 
+#if 0
 int kvm_setup_async_pf(struct kvm_vcpu *vcpu, gpa_t cr2_or_gpa,
 		       unsigned long hva, struct kvm_arch_async_pf *arch)
 {
@@ -226,6 +228,7 @@ retry_sync:
 	kmem_cache_free(async_pf_cache, work);
 	return 0;
 }
+#endif
 
 int kvm_async_pf_wakeup_all(struct kvm_vcpu *vcpu)
 {
