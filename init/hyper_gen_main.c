@@ -900,7 +900,6 @@ static void alloc_vhost_target_file(char *file_dir)
 	image->id = glb_image_cnt++;
 	image->used = false;
 
-#if 0
 	//1. mkdir -p /sys/kernel/config/target/core/fileio_2/myFile2
 	sprintf(buf, "/sys/kernel/config/target/core/fileio_%llu", image->id);
 	ret = sys_mkdir(buf, 0777);
@@ -979,7 +978,6 @@ static void alloc_vhost_target_file(char *file_dir)
 	ret = sys_write(fd, buf, strlen(buf));
 	if (ret <= 0)
 		printk(">>>%s:%d\n", __func__, __LINE__);
-#endif
 
 	//7. save image and link
 	sprintf(image->naa_id, "naa.%llu", image->id);
@@ -993,7 +991,6 @@ static void init_vhost_target_file(void)
 {
 	int ret;
 
-#if 0
 	ret = sys_mount("sysfs", "/sys", "sysfs", MS_MGC_VAL, NULL);
 	if (ret)
 		printk(">>>%s:%d\n", __func__, __LINE__);
@@ -1005,7 +1002,6 @@ static void init_vhost_target_file(void)
 	ret = sys_mkdir("/sys/kernel/config/target/vhost", 0777);
 	if (ret)
 		printk(">>>%s:%d\n", __func__, __LINE__);
-#endif
 
 	alloc_vhost_target_file("fd_dev_name=/home/gen/openSource/guen/rootfs/debootstrap.ext2.raw,fd_dev_size=5116637696");
 
@@ -1116,54 +1112,9 @@ out:
 	rtnl_unlock();
 }
 
-#include <uapi/linux/fadvise.h>
-
-extern int fileio_inited;
-extern int fileio_ret;
-
 void hyper_gen_init(void)
 {
 	int pid;
-
-//	sys_sync();
-#if 0
-	int ret;
-	int fd;
-	fd = sys_openat(AT_FDCWD, (const char __user *)"/dev/sda2", O_RDONLY|O_CLOEXEC, 0);
-	if (fd < 0)
-		printk(">>>%s:%d fd=%d\n", __func__, __LINE__, fd);
-
-	ret = sys_fadvise64(fd, 0, 0, POSIX_FADV_RANDOM);
-	if (ret < 0)
-		printk(">>>%s:%d ret=%d\n", __func__, __LINE__, ret);
-
-	sys_close(fd);
-
-	fd = sys_openat(AT_FDCWD, (const char __user *)"/dev/sda1", O_RDONLY|O_CLOEXEC, 0);
-	if (fd < 0)
-		printk(">>>%s:%d fd=%d\n", __func__, __LINE__, fd);
-
-	ret = sys_fadvise64(fd, 0, 0, POSIX_FADV_RANDOM);
-	if (ret < 0)
-		printk(">>>%s:%d ret=%d\n", __func__, __LINE__, ret);
-
-	sys_close(fd);
-
-	fd = sys_openat(AT_FDCWD, (const char __user *)"/dev/sda", O_RDONLY|O_CLOEXEC, 0);
-	if (fd < 0)
-		printk(">>>%s:%d fd=%d\n", __func__, __LINE__, fd);
-
-	ret = sys_fadvise64(fd, 0, 0, POSIX_FADV_RANDOM);
-	if (ret < 0)
-		printk(">>>%s:%d ret=%d\n", __func__, __LINE__, ret);
-
-	sys_close(fd);
-
-	ret = sys_mount((char __user *)"/dev/sda2", (char __user *)"/home/gen/openSource/guen/rootfs", 
-			(char __user *)"ext4", MS_MGC_VAL, NULL);
-	if (ret < 0)
-		printk(">>>%s:%d ret=%d\n", __func__, __LINE__, ret);
-#endif
 
 	//setup hugepages
 	__nr_hugepages_store_common(0, &default_hstate, -1, 2048, 0);
@@ -1184,8 +1135,6 @@ void hyper_gen_init(void)
 	rcu_read_unlock();
 
 	check_hot_buddy();
-
-//	printk(">>>%s:%d fileio_inited=%d ret=%d\n", __func__, __LINE__, fileio_inited, fileio_ret);
 
 #if 0
 	struct task_struct *p;

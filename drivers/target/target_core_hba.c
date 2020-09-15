@@ -53,16 +53,13 @@ int transport_backend_register(const struct target_backend_ops *ops)
 	struct target_backend *tb, *old;
 
 	tb = kzalloc(sizeof(*tb), GFP_KERNEL);
-	if (!tb) {
-		printk(">>>>%s:%d\n", __func__, __LINE__);
+	if (!tb)
 		return -ENOMEM;
-	}
 	tb->ops = ops;
 
 	mutex_lock(&backend_mutex);
 	list_for_each_entry(old, &backend_list, list) {
 		if (!strcmp(old->ops->name, ops->name)) {
-			printk(">>>>%s:%d\n", __func__, __LINE__);
 			pr_err("backend %s already registered.\n", ops->name);
 			mutex_unlock(&backend_mutex);
 			kfree(tb);

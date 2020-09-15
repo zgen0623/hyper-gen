@@ -847,19 +847,9 @@ static const struct target_backend_ops fileio_ops = {
 	.tb_dev_attrib_attrs	= sbc_attrib_attrs,
 };
 
-int fileio_inited = 0;
-int fileio_ret = 0;
-
 static int __init fileio_module_init(void)
 {
-	int ret;
-	fileio_inited = 1;
-
-	ret = transport_backend_register(&fileio_ops);
-	printk(">>>>%s:%d ret=%d\n", __func__, __LINE__, ret);
-	fileio_ret = ret;
-
-	return ret;
+	return transport_backend_register(&fileio_ops);
 }
 
 static void __exit fileio_module_exit(void)

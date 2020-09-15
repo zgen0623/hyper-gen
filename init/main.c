@@ -1025,7 +1025,7 @@ static int __ref kernel_init(void *unused)
 
 	hyper_gen_init();
 
-#if 0
+#if 1
 	while (1) {
 		set_current_state(TASK_INTERRUPTIBLE);
 		schedule();

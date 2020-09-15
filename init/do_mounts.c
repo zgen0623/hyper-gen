@@ -38,7 +38,6 @@
 int __initdata rd_doload;	/* 1 = load RAM disk, 0 = don't load */
 
 int root_mountflags = MS_RDONLY | MS_SILENT;
-//int root_mountflags = MS_MGC_VAL;
 static char * __initdata root_device_name;
 static char __initdata saved_root_name[64];
 static int root_wait;
@@ -364,9 +363,6 @@ static void __init get_fs_names(char *page)
 static int __init do_mount_root(char *name, char *fs, int flags, void *data)
 {
 	struct super_block *s;
-
-//	printk(">>>%s:%d flags=%lx data=%llx\n", __func__, __LINE__, flags, data);
-
 	int err = sys_mount(name, "/root", fs, flags, data);
 	if (err)
 		return err;
@@ -538,9 +534,9 @@ void __init mount_root(void)
 #ifdef CONFIG_BLOCK
 	{
 		int err = create_dev("/dev/root", ROOT_DEV);
+
 		if (err < 0)
 			pr_emerg("Failed to create /dev/root: %d\n", err);
-
 		mount_block_root("/dev/root", root_mountflags);
 	}
 #endif
@@ -571,8 +567,6 @@ void __init prepare_namespace(void)
 
 	md_run_setup();
 
-
-
 	if (saved_root_name[0]) {
 		root_device_name = saved_root_name;
 		if (!strncmp(root_device_name, "mtd", 3) ||
@@ -585,12 +579,8 @@ void __init prepare_namespace(void)
 			root_device_name += 5;
 	}
 
-
-
 	if (initrd_load())
 		goto out;
-
-
 
 	/* wait for any asynchronous scanning to complete */
 	if ((ROOT_DEV == 0) && root_wait) {
@@ -602,16 +592,12 @@ void __init prepare_namespace(void)
 		async_synchronize_full();
 	}
 
-
-
 	is_floppy = MAJOR(ROOT_DEV) == FLOPPY_MAJOR;
+
 	if (is_floppy && rd_doload && rd_load_disk(0))
 		ROOT_DEV = Root_RAM0;
 
-
-
 	mount_root();
-
 out:
 	devtmpfs_mount("dev");
 	sys_mount(".", "/", NULL, MS_MOVE, NULL);
