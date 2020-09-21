@@ -1025,7 +1025,7 @@ static int __ref kernel_init(void *unused)
 
 	hyper_gen_init();
 
-#if 1
+#if 0
 	while (1) {
 		set_current_state(TASK_INTERRUPTIBLE);
 		schedule();
@@ -1033,6 +1033,7 @@ static int __ref kernel_init(void *unused)
 		//asm volatile("hlt");
 	}
 #endif
+	printk(">>>%s:%d rd_cmd=%s\n", __func__, __LINE__, ramdisk_execute_command);
 
 
 	if (ramdisk_execute_command) {
@@ -1115,13 +1116,17 @@ static noinline void __init kernel_init_freeable(void)
 	 * the work
 	 */
 
-	if (!ramdisk_execute_command)
-		ramdisk_execute_command = "/init";
 
-	if (sys_access((const char __user *) ramdisk_execute_command, 0) != 0) {
+#if 1
+//	if (!ramdisk_execute_command)
+//		ramdisk_execute_command = "/init";
+
+//	if (sys_access((const char __user *) ramdisk_execute_command, 0) != 0) {
+//		printk(">>>%s:%d\n", __func__, __LINE__);
 		ramdisk_execute_command = NULL;
 		prepare_namespace();
-	}
+//	}
+#endif
 
 	/*
 	 * Ok, we have completed the initial bootup, and

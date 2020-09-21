@@ -542,6 +542,8 @@ void __init mount_root(void)
 #endif
 }
 
+void hyper_gen_parse_root_dev(char *orignal_root_name);
+
 /*
  * Prepare the namespace - decide what/where to mount, load ramdisks, etc.
  */
@@ -567,6 +569,8 @@ void __init prepare_namespace(void)
 
 	md_run_setup();
 
+	hyper_gen_parse_root_dev(saved_root_name);
+
 	if (saved_root_name[0]) {
 		root_device_name = saved_root_name;
 		if (!strncmp(root_device_name, "mtd", 3) ||
@@ -586,22 +590,27 @@ void __init prepare_namespace(void)
 	if ((ROOT_DEV == 0) && root_wait) {
 		printk(KERN_INFO "Waiting for root device %s...\n",
 			saved_root_name);
+
 		while (driver_probe_done() != 0 ||
 			(ROOT_DEV = name_to_dev_t(saved_root_name)) == 0)
 			msleep(5);
 		async_synchronize_full();
 	}
 
+#if 0
 	is_floppy = MAJOR(ROOT_DEV) == FLOPPY_MAJOR;
 
 	if (is_floppy && rd_doload && rd_load_disk(0))
 		ROOT_DEV = Root_RAM0;
+#endif
 
 	mount_root();
 out:
 	devtmpfs_mount("dev");
+
 	sys_mount(".", "/", NULL, MS_MOVE, NULL);
 	sys_chroot(".");
+
 #ifdef CONFIG_BLOCK
 	/* recreate the /dev/root */
 	err = create_dev("/dev/root", ROOT_DEV);
