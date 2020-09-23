@@ -821,6 +821,20 @@ static struct hash_cell *__find_device_hash_cell(struct dm_ioctl *param)
 	return hc;
 }
 
+int my_dm_get_uuid_by_dev(dev_t dev, char *uuid, int length)
+{
+	struct hash_cell *hc = NULL;
+
+	hc = __get_dev_cell(dev);
+	if (!hc)
+		return -1;
+
+	if (hc->uuid)
+		strlcpy(uuid, hc->uuid, length);
+
+	return 0;
+}
+
 static struct mapped_device *find_device(struct dm_ioctl *param)
 {
 	struct hash_cell *hc;
@@ -1503,6 +1517,7 @@ static int table_status(struct file *filp, struct dm_ioctl *param, size_t param_
 	table = dm_get_live_or_inactive_table(md, param, &srcu_idx);
 	if (table)
 		retrieve_status(table, param, param_size);
+
 	dm_put_live_table(md, srcu_idx);
 
 	dm_put(md);
@@ -1704,6 +1719,13 @@ static int check_version(unsigned int cmd, struct dm_ioctl __user *user)
 		return -EFAULT;
 
 	return r;
+}
+
+void my_get_dm_version(uint32_t *version)
+{
+	version[0] = DM_VERSION_MAJOR;
+	version[1] = DM_VERSION_MINOR;
+	version[2] = DM_VERSION_PATCHLEVEL;
 }
 
 #define DM_PARAMS_MALLOC	0x0001	/* Params allocated with kvmalloc() */
@@ -1915,6 +1937,19 @@ static int dm_open(struct inode *inode, struct file *filp)
 	priv->global_event_nr = atomic_read(&dm_global_event_nr);
 
 	return 0;
+}
+
+void *my_dm_open(void)
+{
+	struct dm_file *priv;
+
+	priv = kmalloc(sizeof(struct dm_file), GFP_KERNEL);
+	if (!priv)
+		return NULL;
+
+	priv->global_event_nr = atomic_read(&dm_global_event_nr);
+
+	return priv;
 }
 
 static int dm_release(struct inode *inode, struct file *filp)

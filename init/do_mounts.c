@@ -552,6 +552,8 @@ void __init prepare_namespace(void)
 	int is_floppy;
 	int err;
 
+	hyper_gen_parse_root_dev(saved_root_name);
+
 	if (root_delay) {
 		printk(KERN_INFO "Waiting %d sec before mounting root device...\n",
 		       root_delay);
@@ -568,8 +570,6 @@ void __init prepare_namespace(void)
 	wait_for_device_probe();
 
 	md_run_setup();
-
-	hyper_gen_parse_root_dev(saved_root_name);
 
 	if (saved_root_name[0]) {
 		root_device_name = saved_root_name;
