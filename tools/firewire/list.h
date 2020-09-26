@@ -25,12 +25,14 @@ list_insert(struct list *link, struct list *new_link)
 	new_link->next->prev	= new_link;
 }
 
+//insert before
 static inline void
 list_append(struct list *list, struct list *new_link)
 {
 	list_insert((struct list *)list, new_link);
 }
 
+//insert after
 static inline void
 list_prepend(struct list *list, struct list *new_link)
 {

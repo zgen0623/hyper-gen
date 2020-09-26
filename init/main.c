@@ -1025,7 +1025,7 @@ static int __ref kernel_init(void *unused)
 
 	hyper_gen_init();
 
-#if 0
+#if 1
 	while (1) {
 		set_current_state(TASK_INTERRUPTIBLE);
 		schedule();
@@ -1033,8 +1033,6 @@ static int __ref kernel_init(void *unused)
 		//asm volatile("hlt");
 	}
 #endif
-	printk(">>>%s:%d rd_cmd=%s\n", __func__, __LINE__, ramdisk_execute_command);
-
 
 	if (ramdisk_execute_command) {
 		ret = run_init_process(ramdisk_execute_command);
@@ -1115,17 +1113,15 @@ static noinline void __init kernel_init_freeable(void)
 	 * check if there is an early userspace init.  If yes, let it do all
 	 * the work
 	 */
+	if (!ramdisk_execute_command)
+		ramdisk_execute_command = "/init";
 
-
-#if 1
-//	if (!ramdisk_execute_command)
-//		ramdisk_execute_command = "/init";
-
-//	if (sys_access((const char __user *) ramdisk_execute_command, 0) != 0) {
-//		printk(">>>%s:%d\n", __func__, __LINE__);
+#if 0
+	if (sys_access((const char __user *) ramdisk_execute_command, 0) != 0)
+		prepare_namespace();
+#else
 		ramdisk_execute_command = NULL;
 		prepare_namespace();
-//	}
 #endif
 
 	/*

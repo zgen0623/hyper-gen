@@ -96,6 +96,10 @@
 #include <asm/sections.h>
 #include <asm/cacheflush.h>
 #include <uapi/asm/stat.h>
+#include <uapi/linux/dm-ioctl.h>
+
+#define DM_EXISTS_FLAG 0x00000004
+#define DM_SKIP_BDGET_FLAG  (1 << 9) /* In */
 
 #define NUMBER_OF_MAJORS 4096
 #define PARTITION_SCSI_DEVICE (1 << 0)
@@ -144,8 +148,190 @@
 #define DEFAULT_PV_MIN_SIZE_KB 2048
 
 #define MDA_IGNORED      0x00000001
+#define MDA_INCONSISTENT 0x00000002
+#define MDA_FAILED       0x00000004
+
 #define RAW_LOCN_IGNORED 0x00000001
 #define NAME_LEN 128
+
+
+#define lv_is_pvmove(lv)    (((lv)->status & PVMOVE) ? 1 : 0)
+#define lv_is_mirror_log(lv)    (((lv)->status & MIRROR_LOG) ? 1 : 0)
+#define lv_is_mirror_image(lv)  (((lv)->status & MIRROR_IMAGE) ? 1 : 0)
+
+#define SEG_ONLY_EXCLUSIVE  0x0000000000010000ULL /* In cluster only exlusive activation */
+#define seg_only_exclusive(seg) ((seg)->segtype->flags & SEG_ONLY_EXCLUSIVE ? 1 : 0)
+
+#define LCK_LV      0x00000008U /* Logical Volume */
+#define LCK_READ    0x00000001U /* LCK$_CRMODE (Activate) */
+#define LCK_EXCL    0x00000005U /* LCK$_EXMODE (Exclusive) */
+#define LCK_HOLD    0x00000020U /* Hold lock when returns? */
+#define LCK_CLUSTER_VG  0x00000080U /* VG is clustered */
+#define LCK_LOCAL   0x00000040U /* Don't propagate to other nodes */
+
+#define LCK_LV_EXCLUSIVE    (LCK_LV | LCK_EXCL)
+#define LCK_LV_ACTIVATE     (LCK_LV | LCK_READ)
+
+#define seg_is_replicator_dev(seg) ((seg)->segtype->flags & 0x0000000000000200ULL ? 1 : 0)
+#define vg_is_clustered(vg) ((vg)->status & CLUSTERED)
+
+#define LCK_LV_CLUSTERED(lv)    \
+    (vg_is_clustered((lv)->vg) ? LCK_CLUSTER_VG : 0)
+
+#define lv_is_cache_pool(lv)    (((lv)->status & CACHE_POOL) ? 1 : 0)
+#define lv_is_thin_type(lv) (((lv)->status & (THIN_POOL | THIN_VOLUME | THIN_POOL_DATA | THIN_POOL_METADATA)) ? 1 : 0)
+
+#define DM_MAX_TYPE_NAME 16
+#define DM_NAME_LEN 128
+
+#define UUID_PREFIX "LVM-"
+
+#define LCK_NONBLOCK    0x00000010U /* Don't block waiting for lock? */
+
+#define SECTION_B_CHAR '{'
+#define SECTION_E_CHAR '}'
+
+typedef enum {
+    INFO,   /* DM_DEVICE_INFO ioctl */
+    STATUS, /* DM_DEVICE_STATUS ioctl */
+    MKNODES
+} info_type_t;
+
+
+typedef enum {
+    PRELOAD,
+    ACTIVATE,
+    DEACTIVATE,
+    SUSPEND,
+    SUSPEND_WITH_LOCKFS,
+    CLEAN
+} action_t;
+
+struct dev_manager {
+    void *target_state;
+    uint32_t pvmove_mirror_count;
+    int flush_required;
+    int activation;                 /* building activation tree */
+    int suspend;            /* building suspend tree */
+    int skip_external_lv;
+
+    struct list_head pending_delete;  /* str_list of dlid(s) with pending delete */
+
+    unsigned track_pending_delete;
+    unsigned track_pvmove_deps;
+    
+    char *vg_name;
+};
+
+struct dm_info {
+    int exists;
+    int suspended;
+    int live_table;
+    int inactive_table;     
+    int32_t open_count;
+    uint32_t event_nr;
+    uint32_t major;
+    uint32_t minor;     /* minor device number */
+    int read_only;      /* 0:read-write; 1:read-only */
+    int32_t target_count;
+    int deferred_remove;
+    int internal_suspend;
+};
+
+struct load_properties {
+    int read_only;
+    uint32_t major;
+    uint32_t minor;
+
+    uint32_t read_ahead;
+    uint32_t read_ahead_flags;
+
+    unsigned segment_count;
+    int size_changed;
+
+   // struct dm_list segs;
+    struct list_head segs;
+
+    const char *new_name;
+    unsigned immediate_dev_node;
+
+    unsigned delay_resume_if_new;
+
+    unsigned send_messages;
+    /* Skip suspending node's children, used when sending messages to thin-pool */
+    int skip_suspend;
+};
+
+
+struct dm_tree;
+struct dm_tree_node;
+typedef enum {
+    DM_NODE_CALLBACK_PRELOADED,   /* Node has preload deps */
+    DM_NODE_CALLBACK_DEACTIVATED, /* Node is deactivated */
+} dm_node_callback_t;
+
+
+typedef int (*dm_node_callback_fn) (struct dm_tree_node *node,
+                    dm_node_callback_t type, void *cb_data);
+
+struct dm_tree_node {
+    struct dm_tree *dtree;
+
+    const char *name;
+    const char *uuid;
+    struct dm_info info;
+
+	dev_t dev;
+	struct list_head dev_hash_list;
+	struct list_head uuid_hash_list;
+
+
+//    struct dm_list uses;        /* Nodes this node uses */
+    struct list_head uses;        /* Nodes this node uses */
+    //struct dm_list used_by;     /* Nodes that use this node */
+    struct list_head used_by;     /* Nodes that use this node */
+
+    int activation_priority;    /* 0 gets activated first */
+    int implicit_deps;      /* 1 device only implicitly referenced */
+
+    uint16_t udev_flags;        /* Udev control flags */
+
+    void *context;          /* External supplied context */
+
+    struct load_properties props;   /* For creation/table (re)load */
+
+    struct dm_tree_node *presuspend_node;
+
+    /* Callback */
+    dm_node_callback_fn callback;
+    void *callback_data;
+
+//    struct dm_list activated;   /* Head of activated nodes for preload revert */
+    struct list_head activated;   /* Head of activated nodes for preload revert */
+    //struct dm_list activated_list;  /* List of activated nodes for preload revert */
+    struct list_head activated_list;  /* List of activated nodes for preload revert */
+};
+
+
+struct dm_tree {
+//    struct dm_pool *mem;
+
+//    struct dm_hash_table *devs;
+    struct list_head devs;
+
+//	struct dm_hash_table *uuids;
+	struct list_head uuids;
+
+    struct dm_tree_node root;
+
+    int skip_lockfs;        /* 1 skips lockfs (for non-snapshots) */
+    int no_flush;           /* 1 sets noflush (mirrors/multipath) */
+    int retry_remove;       /* 1 retries remove if not successful */
+    uint32_t cookie;
+    char buf[DM_NAME_LEN + 32]; /* print buffer for device_name (major:minor) */
+    const char **optional_uuid_suffixes;    /* uuid suffixes ignored when matching */
+};
+
 
 typedef enum {
     MD_MINOR_VERSION_MIN,
@@ -245,6 +431,397 @@ struct label {
     void *info;
 };
 
+
+
+struct text_fid_context {
+    char *raw_metadata_buf;
+    uint32_t raw_metadata_buf_size;
+};
+
+struct format_instance {
+ //   unsigned ref_count; /* Refs to this fid from VG and PV structs */
+//    struct dm_pool *mem;
+
+ //   uint32_t type; 
+  //  const struct format_type *fmt;
+    
+    /*
+     * Each mda in a vg is on exactly one of the below lists.
+     * MDAs on the 'in_use' list will be read from / written to
+     * disk, while MDAs on the 'ignored' list will not be read
+     * or written to.
+     */
+    /* FIXME: Try to use the index only. Remove these lists. */
+	char *vgname;
+
+//    struct dm_list metadata_areas_in_use;
+	struct list_head metadata_areas_in_use;
+  //  struct dm_list metadata_areas_ignored;
+    struct list_head metadata_areas_ignored;
+
+   // struct dm_hash_table *metadata_areas_index;
+    struct list_head metadata_areas_index;
+
+    struct text_fid_context fid_ctx;
+};
+
+struct id {
+    char uuid[ID_LEN];
+};
+
+struct volume_group;
+struct logical_volume;
+struct lv_segment;
+struct dm_config_node;
+struct lvmcache_vginfo;
+
+struct lv_activate_opts {
+    int exclusive;
+    int origin_only;
+    int no_merging;
+    int send_messages;
+    int skip_in_use;
+    unsigned revert;
+    unsigned read_only;
+    unsigned noscan;
+    unsigned temporary;
+};
+struct dm_tree_node;
+
+struct segtype_handler {
+    const char *(*name) (const struct lv_segment *seg);
+    const char *(*target_name) (const struct lv_segment *seg,
+                    const struct lv_activate_opts *laopts);
+    int (*text_import_area_count) (const struct dm_config_node *sn,
+                       uint32_t *area_count);
+    int (*text_import) (struct lv_segment *seg,
+                const struct dm_config_node *sn,
+                struct list_head *pv_hash);
+    int (*merge_segments) (struct lv_segment *seg1,
+                   struct lv_segment *seg2);
+    int (*add_target_line) (struct dev_manager *dm,
+                struct lv_segment *seg,
+                struct dm_tree_node *node, uint64_t len);
+#if 0
+    int (*target_status_compatible) (const char *type);
+    int (*check_transient_status) (struct lv_segment *seg, char *params);
+    int (*target_percent) (void **target_state,
+                   dm_percent_t *percent,
+                   struct dm_pool * mem,
+                   struct cmd_context *cmd,
+                   struct lv_segment *seg, char *params,
+                   uint64_t *total_numerator,
+                   uint64_t *total_denominator);
+    int (*target_present) (struct cmd_context *cmd,
+                   const struct lv_segment *seg,
+                   unsigned *attributes);
+    int (*modules_needed) (struct dm_pool *mem,
+                   const struct lv_segment *seg,
+                   struct dm_list *modules);
+    void (*destroy) (struct segment_type * segtype);
+    int (*target_monitored) (struct lv_segment *seg, int *pending);
+    int (*target_monitor_events) (struct lv_segment *seg, int events);
+    int (*target_unmonitor_events) (struct lv_segment *seg, int events);
+#endif
+};
+
+
+struct segment_type {
+    //struct dm_list list;        /* Internal */
+    struct list_head list;        /* Internal */
+    
+    uint64_t flags;
+    uint32_t parity_devs;       /* Parity drives required by segtype */
+                
+    struct segtype_handler *ops;
+    const char *name;
+    
+    void *library;          /* lvm_register_segtype() sets this. */
+    void *private;          /* For the segtype handler to use. */
+}; 
+
+struct physical_volume {
+    struct id id;
+    struct id old_id;       /* Set during pvchange -u. */
+    struct hyper_rootdev_device *dev;
+  //  const struct format_type *fmt;
+    struct format_instance *fid;
+
+    /*
+     * vg_name and vgid are used before the parent VG struct exists.
+     * FIXME: Investigate removal/substitution with 'vg' fields.
+     */
+    const char *vg_name;
+    struct id vgid;
+    struct volume_group *vg;
+
+    uint64_t status;
+    uint64_t size;
+
+    /* bootloader area */
+    uint64_t ba_start;
+    uint64_t ba_size;
+
+    /* physical extents */
+    uint32_t pe_size;
+    uint64_t pe_start;
+    uint32_t pe_count;
+    uint32_t pe_alloc_count;
+    unsigned long pe_align;
+    unsigned long pe_align_offset;
+    uint64_t is_labelled:1;
+
+        /* NB. label_sector is valid whenever is_labelled is true */
+    uint64_t label_sector;
+
+//    struct dm_list segments;    /* Ordered pv_segments covering complete PV */
+    struct list_head segments;    /* Ordered pv_segments covering complete PV */
+
+ //   struct dm_list tags;
+    struct list_head tags;
+
+	char *pvn_key;
+    struct list_head list;
+};
+
+
+struct pv_segment {
+  //  struct dm_list list;    /* Member of pv->segments: ordered list
+   //              * covering entire data area on this PV */
+	struct list_head list;
+        
+    struct physical_volume *pv;
+    uint32_t pe;
+    uint32_t len;
+            
+    struct lv_segment *lvseg;   /* NULL if free space */
+    uint32_t lv_area;   /* Index to area in LV segment */
+};  
+
+typedef enum {
+    AREA_UNASSIGNED,
+    AREA_PV,
+    AREA_LV
+} area_type_t;
+
+struct lv_segment_area {
+    area_type_t type;
+    union {
+        struct {
+            struct pv_segment *pvseg;
+        } pv;
+        struct {
+            struct logical_volume *lv;
+            uint32_t le;
+        } lv;
+    } u;
+};
+
+struct lv_segment {
+    //struct dm_list list;
+    struct list_head list;
+    struct logical_volume *lv;
+
+    const struct segment_type *segtype;
+    uint32_t le;
+    uint32_t len;
+
+    uint64_t status;
+
+    /* FIXME Fields depend on segment type */
+    uint32_t stripe_size;   /* For stripe and RAID - in sectors */
+    uint32_t writebehind;   /* For RAID (RAID1 only) */
+    uint32_t min_recovery_rate; /* For RAID */
+    uint32_t max_recovery_rate; /* For RAID */
+    uint32_t area_count;
+    uint32_t area_len;
+    uint32_t chunk_size;    /* For snapshots/thin_pool.  In sectors. */
+
+    struct logical_volume *origin;  /* snap and thin */
+    struct logical_volume *merge_lv; /* thin, merge descendent lv into this ancestor */
+    struct logical_volume *cow;
+
+    //struct dm_list origin_list;
+    struct list_head origin_list;
+
+    uint32_t region_size;   /* For mirrors, replicators - in sectors */
+    uint32_t extents_copied;
+    struct logical_volume *log_lv;
+    struct lv_segment *pvmove_source_seg;
+    void *segtype_private;
+
+    //struct dm_list tags;
+    struct list_head tags;
+
+    struct lv_segment_area *areas;
+    struct lv_segment_area *meta_areas; /* For RAID */
+
+    struct logical_volume *metadata_lv; /* For thin_pool */
+    uint64_t transaction_id;        /* For thin_pool, thin */
+    unsigned zero_new_blocks;       /* For thin_pool */
+ //   thin_discards_t discards;       /* For thin_pool */
+
+    //struct dm_list thin_messages;       /* For thin_pool */
+    struct list_head thin_messages;       /* For thin_pool */
+
+    struct logical_volume *external_lv; /* For thin */
+    struct logical_volume *pool_lv;     /* For thin, cache */
+
+    uint32_t device_id;         /* For thin, 24bit */
+    uint64_t feature_flags;         /* For cache_pool */
+    const char *policy_name;        /* For cache_pool */
+    struct dm_config_node *policy_settings; /* For cache_pool */
+    unsigned cleaner_policy;        /* For cache */
+
+    struct logical_volume *replicator;/* For replicator-devs - link to replicator LV */
+    struct logical_volume *rlog_lv; /* For replicators */
+    const char *rlog_type;      /* For replicators */
+    uint64_t rdevice_index_highest; /* For replicators */
+    unsigned rsite_index_highest;   /* For replicators */
+};
+
+union lvid {
+    struct id id[2];
+    char s[2 * sizeof(struct id) + 1 + 7];
+};
+
+typedef enum {
+    ALLOC_INVALID,
+    ALLOC_CONTIGUOUS,
+    ALLOC_CLING,
+    ALLOC_CLING_BY_TAGS,    /* Internal - never written or displayed. */
+    ALLOC_NORMAL,
+    ALLOC_ANYWHERE,
+    ALLOC_INHERIT
+} alloc_policy_t;
+
+
+struct logical_volume {
+    union lvid lvid;
+    const char *name;
+
+    struct volume_group *vg;
+
+    uint64_t status;
+    alloc_policy_t alloc;
+  //  struct profile *profile;
+    uint32_t read_ahead;
+    int32_t major;
+    int32_t minor;
+
+    uint64_t size;      /* Sectors visible */
+    uint32_t le_count;  /* Logical extents visible */
+
+    uint32_t origin_count;
+    uint32_t external_count;
+
+   // struct dm_list snapshot_segs;
+    struct list_head snapshot_segs;
+
+    struct lv_segment *snapshot;
+
+
+//    struct replicator_device *rdevice;/* For replicator-devs, rimages, slogs - reference to rdevice */
+   // struct dm_list rsites;  /* For replicators - all sites */
+    struct list_head rsites;  /* For replicators - all sites */
+
+  //  struct dm_list segments;
+    struct list_head segments;
+
+    //struct dm_list tags;
+    struct list_head tags;
+
+    //struct dm_list segs_using_this_lv;
+    struct list_head segs_using_this_lv;
+
+    uint64_t timestamp;
+    unsigned new_lock_args:1;
+    const char *hostname;
+    const char *lock_args;
+
+    struct list_head list;
+};
+
+
+
+struct volume_group {
+ //   struct cmd_context *cmd;
+ //   struct dm_pool *vgmem;
+    struct format_instance *fid;
+//    const struct format_type *original_fmt; /* Set when processing backup files */
+    struct lvmcache_vginfo *vginfo;
+
+ //   struct dm_list *cmd_vgs;/* List of wanted/locked and opened VGs */
+    struct list_head *cmd_vgs;/* List of wanted/locked and opened VGs */
+
+    uint32_t cmd_missing_vgs;/* Flag marks missing VG */
+    uint32_t seqno;     /* Metadata sequence number */
+    unsigned skip_validate_lock_args : 1;
+
+    struct volume_group *vg_ondisk;
+ //   struct dm_config_tree *cft_precommitted; /* Precommitted metadata */
+    struct volume_group *vg_precommitted; /* Parsed from cft */
+
+    alloc_policy_t alloc;
+ //   struct profile *profile;
+    uint64_t status;
+
+    struct id id;
+    const char *name;
+    const char *old_name;       /* Set during vgrename and vgcfgrestore */
+    const char *system_id;
+    char *lvm1_system_id;
+    const char *lock_type;
+    const char *lock_args;
+    uint32_t extent_size;
+    uint32_t extent_count;
+    uint32_t free_count;
+
+    uint32_t max_lv;
+    uint32_t max_pv;
+
+    /* physical volumes */
+    uint32_t pv_count;
+ //   struct dm_list pvs;
+    struct list_head pvs;
+
+    //struct dm_list pvs_to_create;
+    struct list_head pvs_to_create;
+
+  //  struct dm_list pvs_outdated;
+    struct list_head pvs_outdated;
+
+    //struct dm_list lvs;
+    struct list_head lvs;
+
+//    struct dm_list tags;
+    struct list_head tags;
+
+    //struct dm_list removed_lvs;
+    struct list_head removed_lvs;
+
+    /*
+     * List of removed physical volumes by pvreduce.
+     * They have to get cleared on vg_commit.
+     */
+    //struct dm_list removed_pvs;
+    struct list_head removed_pvs;
+
+    uint32_t open_mode; /* FIXME: read or write - check lock type? */
+
+    /*
+     * Store result of the last vg_read().
+     * 0 for success else appropriate FAILURE_* bits set.
+     */
+    uint32_t read_status;
+    uint32_t mda_copies; /* target number of mdas for this VG */
+
+//    struct dm_hash_table *hostnames; /* map of creation hostnames */
+    struct logical_volume *pool_metadata_spare_lv; /* one per VG */
+    struct logical_volume *sanlock_lv; /* one per VG */
+};
+
+
 /* One per VG */
 struct lvmcache_vginfo {
    // struct dm_list list;    /* Join these vginfos together */
@@ -267,7 +844,7 @@ struct lvmcache_vginfo {
     char *vgmetadata;   /* Copy of VG metadata as format_text string */
 //    struct dm_config_tree *cft; /* Config tree created from vgmetadata */
                     /* Lifetime is directly tied to vgmetadata */
- //   struct volume_group *cached_vg;
+    struct volume_group *cached_vg;
     unsigned holders;
     unsigned vg_use_count;  /* Counter of vg reusage */
     unsigned precommitted;  /* Is vgmetadata live or precommitted? */
@@ -379,10 +956,6 @@ struct mda_header {
     struct raw_locn raw_locns[0];   /* NULL-terminated list */
 } __attribute__ ((packed));
 
-struct id {
-    int8_t uuid[ID_LEN];
-};
-
 struct lvmcache_vgsummary {
     const char *vgname;
     struct id vgid;
@@ -393,16 +966,85 @@ struct lvmcache_vgsummary {
     size_t mda_size;
 }; 
 
+typedef enum {
+    DM_CFG_INT,
+    DM_CFG_FLOAT,
+    DM_CFG_STRING,
+    DM_CFG_EMPTY_ARRAY
+} dm_config_value_type_t;
 
+struct dm_config_value {
+    dm_config_value_type_t type;
+
+    union {
+        int64_t i;
+        float f;
+        double d;           /* Unused. */
+        const char *str;
+    } v;
+
+    struct dm_config_value *next;   /* For arrays */
+    uint32_t format_flags;
+};
+
+struct dm_config_node {
+    const char *key;
+    struct dm_config_node *parent, *sib, *child;
+    struct dm_config_value *v;
+    int id;
+};
+
+enum {
+    TOK_INT,
+    TOK_FLOAT,
+    TOK_STRING,     /* Single quotes */
+    TOK_STRING_ESCAPED, /* Double quotes */
+    TOK_STRING_BARE,    /* No quotes */
+    TOK_EQ,
+    TOK_SECTION_B,
+    TOK_SECTION_E,
+    TOK_ARRAY_B,
+    TOK_ARRAY_E,
+    TOK_IDENTIFIER,
+    TOK_COMMA,
+    TOK_EOF
+};
+
+struct parser {
+    const char *fb, *fe;        /* file limits */
+    int t;          /* token limits and type */
+    const char *tb, *te;
+    int line;       /* line number we are on */
+};
+
+
+int my_dev_create(struct dm_ioctl *param);
 void *my_dm_open(void);
 void my_get_dm_version(uint32_t *version);
 int my_dm_get_uuid_by_dev(dev_t dev, char *uuid, int length);
+static struct dm_tree_node *_create_dm_tree_node(struct dm_tree *dtree,
+                         const char *name,
+                         const char *uuid,
+                         struct dm_info *info,
+                         void *context,
+                         uint16_t udev_flags);
+static int _add_to_toplevel(struct dm_tree_node *node);
+static int _add_to_bottomlevel(struct dm_tree_node *node);
+static int _uuid_prefix_matches(const char *uuid, const char *uuid_prefix, size_t uuid_prefix_len);
+static void *dm_alloc(size_t length, bool zero);
+static void dm_free(void *ptr);
 
 
 static uint32_t _dm_device_major = 0;
-static void *dm_ctl_priv = NULL;
-static unsigned _dm_version_minor = 0;
-static unsigned _dm_version_patchlevel = 0;
+
+static char *real_root_dev_name;
+static char *vgname;
+static char *lvname;
+
+static void **dm_alloc_array = NULL;
+static uint32_t dm_alloc_array_size = 0;
+static uint32_t dm_alloc_array_cnt = 0;
+
 
 static const dev_known_type_t _dev_known_types[] = {
     {"sd", 16, "SCSI disk"},
@@ -444,9 +1086,8 @@ static const dev_known_type_t _dev_known_types[] = {
 };
 
 static struct list_head pv_head;
+static struct list_head segtypes_head;
 static struct list_head vginfo_head;
-
-
 
 static void parse_one_dt(char *line, struct dev_types *dts)
 {
@@ -507,16 +1148,12 @@ static void parse_one_dt(char *line, struct dev_types *dts)
 
     /* Look for device-mapper device */
     /* FIXME Cope with multiple majors */
-    if (!strncmp("device-mapper", line + i, 13) && !(*(line + i + 13))) {
-//		printk(">>>%s:%d dm maj=%lx\n", __func__, __LINE__, line_maj);
+    if (!strncmp("device-mapper", line + i, 13) && !(*(line + i + 13)))
         dts->device_mapper_major = line_maj;
-	}
 
     /* Major is SCSI device */
-    if (!strncmp("sd", line + i, 2) && !(*(line + i + 2))) {
-//		printk(">>>%s:%d sd maj=%lx\n", __func__, __LINE__, line_maj);
+    if (!strncmp("sd", line + i, 2) && !(*(line + i + 2)))
         dts->dev_type_array[line_maj].flags |= PARTITION_SCSI_DEVICE;
-	}
 
     /* Go through the valid device names and if there is a
        match store max number of partitions */
@@ -525,8 +1162,6 @@ static void parse_one_dt(char *line, struct dev_types *dts)
         if (dev_len <= strlen(line + i) &&
             !strncmp(_dev_known_types[j].name, line + i, dev_len) &&
             (line_maj < NUMBER_OF_MAJORS)) {
-//				printk(">>>%s:%d dev=%s maj=%lx\n", __func__, __LINE__, line + i, line_maj);
-
             	dts->dev_type_array[line_maj].max_partitions =
                 	_dev_known_types[j].max_partitions;
             break;
@@ -546,18 +1181,22 @@ static struct dev_types *create_dev_types(void)
 	buf = kmalloc(1024, GFP_KERNEL);
 	if (!buf) {
 		printk(">>>%s:%d\n", __func__, __LINE__);
-		goto fail_2;
+		goto fail;
 	}
 
-	dts = kzalloc(sizeof(struct dev_types), GFP_KERNEL);
+//	dts = kzalloc(sizeof(struct dev_types), GFP_KERNEL);
+	dts = dm_alloc(sizeof(struct dev_types), true);
 	if (!dts) {
 		printk(">>>%s:%d\n", __func__, __LINE__);
-		goto fail_2;
+		goto fail;
 	}
 
 	if ((fd = sys_open((const char __user *)"/proc/devices", O_RDONLY, 0)) < 0) {
 		printk(">>>%s:%d\n", __func__, __LINE__);
-		goto fail_1;
+//		kfree(dts);
+		dm_free(dts);
+		dts = NULL;
+		goto fail;
 	}
 
 	while (1) {
@@ -576,16 +1215,11 @@ static struct dev_types *create_dev_types(void)
 		}
 	}
 
-	sys_close(fd);
+fail:
+	if (fd >= 0)
+		sys_close(fd);
 	kfree(buf);
-
 	return dts;
-
-fail_1:
-	kfree(dts);
-fail_2:
-	kfree(buf);
-	return NULL;
 }
 
 static void parse_init(void)
@@ -660,7 +1294,7 @@ static void init_dev(struct hyper_rootdev_device *dev)
 
 static void prepare_dev_list(struct list_head *dev_head)
 {
-	int fd;
+	int fd = -1;
 	char *buf;
 	struct linux_dirent *dirent;
 	int ret;
@@ -674,7 +1308,7 @@ static void prepare_dev_list(struct list_head *dev_head)
 	buf = kmalloc(1024, GFP_KERNEL);
 	if (!buf) {
 		printk(">>>%s:%d\n", __func__, __LINE__);
-		goto fail_1;
+		goto fail;
 	}
 
 	while (1) {
@@ -691,14 +1325,16 @@ static void prepare_dev_list(struct list_head *dev_head)
 				struct __old_kernel_stat tinfo;
     			char *path;
 
-				path = kmalloc(4 + strlen(dirent->d_name) + 2, GFP_KERNEL);
+		//		path = kmalloc(4 + strlen(dirent->d_name) + 2, GFP_KERNEL);
+				path = dm_alloc(4 + strlen(dirent->d_name) + 2, false);
 				sprintf(path, "/dev/%s", dirent->d_name);
 
 				_collapse_slashes(path);
 
 				if (sys_stat(path, (struct __old_kernel_stat __user *)&tinfo) < 0) {
 					printk(">>>%s:%d\n", __func__, __LINE__);
-					kfree(path);
+		//			kfree(path);
+					dm_free(path);
 					goto out;
 				}
 
@@ -706,13 +1342,13 @@ static void prepare_dev_list(struct list_head *dev_head)
 					struct hyper_rootdev_device *dev = NULL;
 					int found = 0;
 
-					list_for_each_entry(dev, dev_head, list) {
+					list_for_each_entry(dev, dev_head, list)
 						if (dev->dev == tinfo.st_rdev)
 							found = 1;
-					}
 
 					if (!found) {
-						dev = kzalloc(sizeof(struct hyper_rootdev_device), GFP_KERNEL);
+			//			dev = kzalloc(sizeof(struct hyper_rootdev_device), GFP_KERNEL);
+						dev = dm_alloc(sizeof(struct hyper_rootdev_device), true);
 						dev->dev = tinfo.st_rdev;
 						dev->path = path;
 
@@ -721,7 +1357,7 @@ static void prepare_dev_list(struct list_head *dev_head)
 						INIT_LIST_HEAD(&dev->list);
 						list_add(&dev->list, dev_head);
 
-			//			printk(">>>%s:%d path=%s dev_t=%x\n", __func__, __LINE__, path, dev->dev);
+						printk(">>>%s:%d path=%s dev_t=%x\n", __func__, __LINE__, path, dev->dev);
 					}
 				}
             }
@@ -730,9 +1366,10 @@ out:
 		}
 	}
 
-fail_1:
+fail:
 	kfree(buf);
-	sys_close(fd);
+	if (fd >= 0)
+		sys_close(fd);
 	return;
 }
 
@@ -880,7 +1517,7 @@ static const char *_get_sysfs_name(struct hyper_rootdev_device *dev)
 
 static int _get_parent_mpath(const char *dir, char *name, int max_size)
 {
-	int fd;
+	int fd = -1;
 	char *buf = NULL;
 	struct linux_dirent *dirent;
 	int ret;
@@ -925,7 +1562,9 @@ static int _get_parent_mpath(const char *dir, char *name, int max_size)
 	}
 
 out:
-	sys_close(fd);
+	if (fd >= 0)
+		sys_close(fd);
+
 	kfree(buf);
 
     return r;
@@ -955,7 +1594,6 @@ out:
 
     return r;
 }
-
 
 static int _get_sysfs_get_major_minor(const char *kname, int *major, int *minor)
 {
@@ -1061,7 +1699,6 @@ out:
 static int dev_read(struct hyper_rootdev_device *dev,
 			uint64_t offset, size_t size, void *buffer)
 {
-    int ret;
     uint64_t mask, delta;
     unsigned int block_size = 0;
     ssize_t n = 0;
@@ -1097,11 +1734,12 @@ static int dev_read(struct hyper_rootdev_device *dev,
 	if (!buf_ref)
 		return 0;
 
-    if (((uintptr_t) align_buffer) & mask)
+    if (((uintptr_t) align_buffer) & mask) {
         align_buffer = (char *)(((uintptr_t)align_buffer + mask) & ~mask);
+	}
 
     if (sys_lseek(dev->fd, align_offset, SEEK_SET) == (off_t) -1)
-        return 0;
+		goto out;
 
 	buf_ptr = align_buffer;
     while (total < align_size) {
@@ -1118,6 +1756,7 @@ static int dev_read(struct hyper_rootdev_device *dev,
 
     memcpy(buffer, align_buffer + (offset - align_offset), size);
 
+out:
 	kfree(buf_ref);
 
     return total;
@@ -1248,8 +1887,7 @@ static int dev_is_partitioned(struct dev_types *dt, struct hyper_rootdev_device 
 
 static int check_pv_min_size(struct hyper_rootdev_device *dev)
 {
-    uint64_t size;
-    int ret = 0;
+	int ret = 0;
 
     /* Check it's not too small */
     if (!dev->size)
@@ -1302,38 +1940,10 @@ static int my_filter(struct dev_types *dts, struct hyper_rootdev_device *dev)
     return 1;
 }
 
-static int open_control(struct dev_types *dt)
-{
-	uint32_t version[3];
-
-    if (dm_ctl_priv)
-        return 0;
-
-    if (!(dm_ctl_priv = my_dm_open())) {
-        printk(">>>%s:%d\n", __func__, __LINE__);
-        return 1;
-	}
-
-	version[0] = 4; 
-	version[0] = 0; 
-	version[0] = 0; 
-
-	my_get_dm_version(version);
-
-    _dm_version_minor = version[1];
-    _dm_version_patchlevel = version[2];
-
-	_dm_device_major = dt->device_mapper_major;
-
-    return 0;
-}
-
-
-static int find_lvm2_label(struct hyper_rootdev_device *dev, char *buf,
+static int lvm2_find_label(struct hyper_rootdev_device *dev, char *buf,
                        uint64_t *label_sector)
 {
     struct label_header *lh;
-    struct lvmcache_info *info;
     uint64_t sector;
     int found = 0;
 	char *readbuf;
@@ -1394,7 +2004,7 @@ static int lvmcache_update_pvid(struct lvmcache_info *info, const char *pvid)
 	struct pv_node *pv, *tmp;
 
 	list_for_each_entry(pv, &pv_head, list)
-		if (pv->info == info && !strcmp(pv->pvid, pvid))
+		if (!strcmp(pv->pvid, pvid))
 			return 1;
 
     if (*info->dev->pvid) {
@@ -1408,10 +2018,16 @@ static int lvmcache_update_pvid(struct lvmcache_info *info, const char *pvid)
 
     strncpy(info->dev->pvid, pvid, sizeof(info->dev->pvid));
 
-	pv = kmalloc(sizeof(struct pv_node), GFP_KERNEL);
+//	pv = kmalloc(sizeof(struct pv_node), GFP_KERNEL);
+	pv = dm_alloc(sizeof(struct pv_node), false);
+
+	pv->info = info;
+	pv->pvid = info->dev->pvid;
 
 	INIT_LIST_HEAD(&pv->list);
 	list_add(&pv->list, &pv_head);
+
+	printk(">>>%s:%d Added a new pv\n", __func__, __LINE__);
 
     return 1;
 }
@@ -1426,13 +2042,16 @@ static struct lvmcache_info *lvmcache_add(struct dev_types *dt, const char *pvid
     strncpy(pvid_s, pvid, sizeof(pvid_s) - 1);
     pvid_s[sizeof(pvid_s) - 1] = '\0';
 
-	if (!(label = kzalloc(sizeof(struct label), GFP_KERNEL)))
+//	if (!(label = kzalloc(sizeof(struct label), GFP_KERNEL)))
+	if (!(label = dm_alloc(sizeof(struct label), true)))
         return NULL;
 
 	strncpy(label->type, LVM2_LABEL, sizeof(label->type));
 
-	if (!(info = kzalloc(sizeof(struct lvmcache_info), GFP_KERNEL))) {
-        kfree(label);
+//	if (!(info = kzalloc(sizeof(struct lvmcache_info), GFP_KERNEL))) {
+	if (!(info = dm_alloc(sizeof(struct lvmcache_info), true))) {
+       // kfree(label);
+        dm_free(label);
         return NULL;
     }
 
@@ -1445,12 +2064,13 @@ static struct lvmcache_info *lvmcache_add(struct dev_types *dt, const char *pvid
 	INIT_LIST_HEAD(&info->das);
 	INIT_LIST_HEAD(&info->bas);
 
-//    info->fmt = labeller->fmt;
     info->status |= CACHE_INVALID;
 
     if (!lvmcache_update_pvid(info, pvid_s)) {
-        kfree(info);
-        kfree(label);
+     //   kfree(info);
+		dm_free(info);
+      //  kfree(label);
+		dm_free(label);
         return NULL;
     }
 
@@ -1553,62 +2173,6 @@ static int dev_read_circular(struct hyper_rootdev_device *dev,
 
     return 1;
 }
-
-typedef enum {
-    DM_CFG_INT,
-    DM_CFG_FLOAT,
-    DM_CFG_STRING,
-    DM_CFG_EMPTY_ARRAY
-} dm_config_value_type_t;
-
-struct dm_config_value {
-    dm_config_value_type_t type;
-
-    union {
-        int64_t i;
-        float f;
-        double d;           /* Unused. */
-        const char *str;
-    } v;
-
-    struct dm_config_value *next;   /* For arrays */
-    uint32_t format_flags;
-};
-
-struct dm_config_node {
-    const char *key;
-    struct dm_config_node *parent, *sib, *child;
-    struct dm_config_value *v;
-    int id;
-};
-
-#define SECTION_B_CHAR '{'
-#define SECTION_E_CHAR '}'
-
-enum {
-    TOK_INT,
-    TOK_FLOAT,
-    TOK_STRING,     /* Single quotes */
-    TOK_STRING_ESCAPED, /* Double quotes */
-    TOK_STRING_BARE,    /* No quotes */
-    TOK_EQ,
-    TOK_SECTION_B,
-    TOK_SECTION_E,
-    TOK_ARRAY_B,
-    TOK_ARRAY_E,
-    TOK_IDENTIFIER,
-    TOK_COMMA,
-    TOK_EOF
-};
-
-struct parser {
-    const char *fb, *fe;        /* file limits */
-
-    int t;          /* token limits and type */
-    const char *tb, *te;
-
-    int line;       /* line number we are on */
-};
 
 static void eat_space(struct parser *p)
 {
@@ -1757,7 +2321,8 @@ static char *_dup_tok(const char *b, const char *e)
 
     len = e - b;
 
-	str = kmalloc(len + 1, GFP_KERNEL);
+//	str = kmalloc(len + 1, GFP_KERNEL);
+	str = dm_alloc(len + 1, false);
     if (!str) {
 		printk(">>>%s:%d\n", __func__, __LINE__);
         return NULL;
@@ -1844,7 +2409,8 @@ static struct dm_config_node *_make_node(const char *key_b, const char *key_e,
 {
     struct dm_config_node *n;
 
-    if (!(n = kzalloc(sizeof(struct dm_config_node), GFP_KERNEL)))
+  //  if (!(n = kzalloc(sizeof(struct dm_config_node), GFP_KERNEL)))
+    if (!(n = dm_alloc(sizeof(struct dm_config_node), true)))
         return NULL;
 
     n->key = _dup_tok(key_b, key_e);
@@ -1909,7 +2475,8 @@ static struct dm_config_value *_type(struct parser *p)
 	int ret;
 	int i;
 
-    v = kzalloc(sizeof(struct dm_config_value), GFP_KERNEL);
+ //   v = kzalloc(sizeof(struct dm_config_value), GFP_KERNEL);
+    v = dm_alloc(sizeof(struct dm_config_value), true);
     if (!v) {
 		printk(">>>%s:%d\n", __func__, __LINE__);
         return NULL;
@@ -1935,14 +2502,12 @@ static struct dm_config_value *_type(struct parser *p)
 
         match_aux(p, TOK_INT);
         break;
-
     case TOK_FLOAT:
         v->type = DM_CFG_FLOAT;
         //v->v.f = strtod(p->tb, NULL);   /* FIXME: check error */
 		printk(">>>%s:%d kernel not support float\n", __func__, __LINE__);
         match_aux(p, TOK_FLOAT);
         break;
-
     case TOK_STRING:
         v->type = DM_CFG_STRING;
 
@@ -1951,7 +2516,6 @@ static struct dm_config_value *_type(struct parser *p)
 
         match_aux(p, TOK_STRING);
         break;
-
     case TOK_STRING_BARE:
         v->type = DM_CFG_STRING;
 
@@ -1960,7 +2524,6 @@ static struct dm_config_value *_type(struct parser *p)
 
         match_aux(p, TOK_STRING_BARE);
         break;
-
     case TOK_STRING_ESCAPED:
         v->type = DM_CFG_STRING;
 
@@ -1971,7 +2534,6 @@ static struct dm_config_value *_type(struct parser *p)
         v->v.str = str;
         match_aux(p, TOK_STRING_ESCAPED);
         break;
-
     default:
 		printk(">>>%s:%d\n", __func__, __LINE__);
         return NULL;
@@ -2006,7 +2568,8 @@ static struct dm_config_value *_value(struct parser *p)
          * Special case for an empty array.
          */
         if (!h) {
-    		if (!(h = kzalloc(sizeof(struct dm_config_value), GFP_KERNEL))) {
+   // 		if (!(h = kzalloc(sizeof(struct dm_config_value), GFP_KERNEL))) {
+    		if (!(h = dm_alloc(sizeof(struct dm_config_value), true))) {
 				printk(">>>%s:%d\n", __func__, __LINE__);
                 return NULL;
             }
@@ -2026,30 +2589,23 @@ static struct dm_config_node *_section(struct parser *p, struct dm_config_node *
     struct dm_config_value *value;
     char *str;
 
-//	printk(">>>%s:%d t=%x\n", __func__, __LINE__, p->t);
-
     if (p->t == TOK_STRING_ESCAPED) {
-//		printk(">>>%s:%d\n", __func__, __LINE__);
         if (!(str = _dup_string_tok(p)))
             return NULL;
 
 		dm_unescape_double_quotes(str);
         match_aux(p, TOK_STRING_ESCAPED);
     } else if (p->t == TOK_STRING) {
-//		printk(">>>%s:%d\n", __func__, __LINE__);
         if (!(str = _dup_string_tok(p)))
             return NULL;
 
         match_aux(p, TOK_STRING);
     } else {
-//		printk(">>>%s:%d\n", __func__, __LINE__);
         if (!(str = _dup_tok(p->tb, p->te)))
             return NULL;
         
         match_aux(p, TOK_IDENTIFIER);
     }
-
-//	printk(">>>%s:%d t=%x\n", __func__, __LINE__, p->t);
 
     if (!strlen(str)) {
 		printk(">>>%s:%d\n", __func__, __LINE__);
@@ -2058,10 +2614,7 @@ static struct dm_config_node *_section(struct parser *p, struct dm_config_node *
 
     root = _find_or_make_node(parent, str, 1);
 
-//	printk(">>>%s:%d str=%s root=%lx\n", __func__, __LINE__, str, root);
-
     if (p->t == TOK_SECTION_B) {
-//		printk(">>>%s:%d\n", __func__, __LINE__);
         match_aux(p, TOK_SECTION_B);
 
         while (p->t != TOK_SECTION_E)
@@ -2070,7 +2623,6 @@ static struct dm_config_node *_section(struct parser *p, struct dm_config_node *
 
         match_aux(p, TOK_SECTION_E);
     } else {
-//		printk(">>>%s:%d\n", __func__, __LINE__);
         match_aux(p, TOK_EQ);
 
         if (!(value = _value(p)))
@@ -2078,7 +2630,6 @@ static struct dm_config_node *_section(struct parser *p, struct dm_config_node *
 
         root->v = value;
     }
-//		printk(">>>%s:%d\n", __func__, __LINE__);
 
     return root;
 }
@@ -2117,7 +2668,8 @@ static int dm_config_parse(const char *start,
 	struct dm_config_node *ret;
     struct parser *p;
 
-    if (!(p = kzalloc(sizeof(*p), GFP_KERNEL)))
+ //   if (!(p = kzalloc(sizeof(*p), GFP_KERNEL)))
+    if (!(p = dm_alloc(sizeof(*p), true)))
         return 0;
 
     p->fb = start;
@@ -2148,8 +2700,6 @@ static int config_file_read_fd(struct hyper_rootdev_device *dev,
     if (!dev_read_circular(dev, (uint64_t) offset, size,
                        (uint64_t) offset2, size2, buf))
         goto out;
-
-	//printk(">>>%s:%d size=%lx size2=%lx\n", __func__, __LINE__, size, size2); 
 
     fb = buf;
     fe = fb + size + size2;
@@ -2237,7 +2787,8 @@ const char *dm_config_find_str_allow_empty(const struct dm_config_node *cn,
 
 static char *dm_pool_strdup(const char *str)
 {   
-    char *ret = kmalloc(strlen(str) + 1, GFP_KERNEL);
+ //   char *ret = kmalloc(strlen(str) + 1, GFP_KERNEL);
+    char *ret = dm_alloc(strlen(str) + 1, false);
 
     if (ret)
         strcpy(ret, str);
@@ -2285,7 +2836,6 @@ static int id_read_format(struct id *id, const char *buffer)
         return 0;
     }
     
-//    return id_valid(id);
     return 1;
 }
 
@@ -2299,7 +2849,6 @@ static int _read_id(struct id *id, const struct dm_config_node *cn, const char *
     }
 
     if (!id_read_format(id, uuid)) {
-        //log_error("Invalid uuid.");
 		printk(">>>%s:%d\n", __func__, __LINE__);
         return 0;
     }
@@ -2771,7 +3320,17 @@ static int lvmcache_update_vgname_and_id(struct lvmcache_info *info, struct lvmc
     /* If moving PV from orphan to real VG, always mark it valid */
     info->status &= ~CACHE_INVALID;
 
-    if (!(vginfo = kzalloc(sizeof(*vginfo), GFP_KERNEL))) {
+	list_for_each_entry(vginfo, &vginfo_head, list) {
+        if (!strcmp(vgname, vginfo->vgname) &&
+				!strncmp(vgid, vginfo->vgid, ID_LEN)) {
+    		list_add(&info->list, &vginfo->infos);
+    		info->vginfo = vginfo;
+			return 1;
+        }
+    }
+
+//    if (!(vginfo = kzalloc(sizeof(*vginfo), GFP_KERNEL))) {
+    if (!(vginfo = dm_alloc(sizeof(*vginfo), true))) {
 		printk(">>>%s:%d\n", __func__, __LINE__);
         return 0;
     }
@@ -2796,8 +3355,6 @@ static int lvmcache_update_vgname_and_id(struct lvmcache_info *info, struct lvmc
     vginfo->mda_checksum = vgsummary->mda_checksum;
     vginfo->mda_size = vgsummary->mda_size;
 
-	printk(">>>%s:%d Added new vginfo\n", __func__, __LINE__);
-
     return 1;
 }
 
@@ -2810,11 +3367,13 @@ static int update_mda(struct metadata_area *mda, void *baton)
 	unsigned mda_ignored;
     unsigned old_mda_ignored;
 
-	if (!(mdah = kmalloc(MDA_HEADER_SIZE, GFP_KERNEL)))
+//	if (!(mdah = kmalloc(MDA_HEADER_SIZE, GFP_KERNEL)))
+	if (!(mdah = dm_alloc(MDA_HEADER_SIZE, false)))
 		goto out;
 
     if (!raw_read_mda_header(mdah, &mdac->area)) {
-		kfree(mdah);
+//		kfree(mdah);
+		dm_free(mdah);
 		goto out;
     }
 
@@ -2838,7 +3397,7 @@ out:
     return 1;
 }
 
-static int lvm2_read(struct dev_types *dt, struct hyper_rootdev_device *dev, void *buf,
+static int lvm2_label_read(struct dev_types *dt, struct hyper_rootdev_device *dev, void *buf,
          struct label **label)
 {                         
     struct label_header *lh = (struct label_header *) buf;
@@ -2868,7 +3427,8 @@ static int lvm2_read(struct dev_types *dt, struct hyper_rootdev_device *dev, voi
     while ((offset = le64_to_cpu(dlocn_xl->offset))) {
 		struct data_area_list *dal;
 
-		dal = kmalloc(sizeof(struct data_area_list), GFP_KERNEL);
+//		dal = kmalloc(sizeof(struct data_area_list), GFP_KERNEL);
+		dal = dm_alloc(sizeof(struct data_area_list), false);
 		if (dal) {
     		dal->disk_locn.offset = offset;
     		dal->disk_locn.size = le64_to_cpu(dlocn_xl->size);
@@ -2884,18 +3444,19 @@ static int lvm2_read(struct dev_types *dt, struct hyper_rootdev_device *dev, voi
     dlocn_xl++;
     while ((offset = le64_to_cpu(dlocn_xl->offset))) {
 		struct metadata_area *mdal;
-	//	struct mda_lists *mda_lists = (struct mda_lists *) fmt->private;
 		struct mda_context *mdac;
 
-		if (!(mdal = kmalloc(sizeof(struct metadata_area), GFP_KERNEL)))
+		//if (!(mdal = kmalloc(sizeof(struct metadata_area), GFP_KERNEL)))
+		if (!(mdal = dm_alloc(sizeof(struct metadata_area), false)))
             goto local_fail;
         
-		if (!(mdac = kmalloc(sizeof(struct mda_context), GFP_KERNEL))) {
-            kfree(mdal);
+	//	if (!(mdac = kmalloc(sizeof(struct mda_context), GFP_KERNEL))) {
+		if (!(mdac = dm_alloc(sizeof(struct mda_context), false))) {
+         //   kfree(mdal);
+            dm_free(mdal);
             goto local_fail;
         }
 
-	//	mdal->ops = mda_lists->raw_ops;
 		mdal->metadata_locn = mdac;
 		mdal->status = 0;
 
@@ -2927,7 +3488,8 @@ local_fail:
     while ((offset = le64_to_cpu(dlocn_xl->offset))) {
 		struct data_area_list *dal;
 
-		dal = kmalloc(sizeof(struct data_area_list), GFP_KERNEL);
+//		dal = kmalloc(sizeof(struct data_area_list), GFP_KERNEL);
+		dal = dm_alloc(sizeof(struct data_area_list), false);
 		if (dal) {
     		dal->disk_locn.offset = offset;
     		dal->disk_locn.size = le64_to_cpu(dlocn_xl->size);
@@ -2952,12 +3514,3731 @@ out:
     return 1;
 }
 
+static int fid_add_mdas(struct format_instance *fid, struct list_head *mdas,
+         const char *key, size_t key_len)
+{   
+    struct metadata_area *mda;
+	struct metadata_area *new_mdal;
+	struct mda_context *new_mdac;
+    
+	list_for_each_entry(mda, mdas, list) {
+	//	if (!(new_mdal = kmalloc(sizeof(struct metadata_area), GFP_KERNEL)))
+		if (!(new_mdal = dm_alloc(sizeof(struct metadata_area), false)))
+            continue;
 
-void hyper_gen_parse_root_dev(char *orignal_root_name)
+    	memcpy(new_mdal, mda, sizeof(*mda));
+        
+//		if (!(new_mdac = kmalloc(sizeof(struct mda_context), GFP_KERNEL))) {
+		if (!(new_mdac = dm_alloc(sizeof(struct mda_context), false))) {
+          //  kfree(new_mdal);
+            dm_free(new_mdal);
+            continue;
+        }
+		memcpy(new_mdac, mda->metadata_locn, sizeof(*new_mdac));
+
+		new_mdal->metadata_locn = new_mdac;
+    	INIT_LIST_HEAD(&new_mdal->list);
+
+		if (new_mdal->status & MDA_IGNORED) {
+			list_add(&new_mdal->list, &fid->metadata_areas_ignored);
+			printk(">>>%s:%d Added a ignored mda\n", __func__, __LINE__);
+		} else {
+			list_add(&new_mdal->list, &fid->metadata_areas_in_use);
+			printk(">>>%s:%d Added a in-use mda\n", __func__, __LINE__);
+		}
+
+    }
+
+    return 1;
+}
+
+static int _create_vg_text_instance(struct format_instance *fid)
+{
+    struct lvmcache_vginfo *vginfo;
+    struct lvmcache_info *info;
+	int found = 0;
+
+	list_for_each_entry(vginfo, &vginfo_head, list) {
+        if (!strcmp(fid->vgname, vginfo->vgname)) {
+			found = 1;
+			break;
+        }
+    }
+
+	if (!found)
+		goto out;
+
+
+	list_for_each_entry(info, &vginfo->infos, list)
+        if (!fid_add_mdas(fid, &info->mdas, info->dev->pvid, ID_LEN))
+            goto out; 
+
+out:
+    return 1;
+}
+
+
+static struct raw_locn *_find_vg_rlocn(struct device_area *dev_area,
+                       struct mda_header *mdah,
+                       const char *vgname)
+{
+    size_t len;
+    char vgnamebuf[NAME_LEN + 2] __attribute__((aligned(8)));
+    struct raw_locn *rlocn, *rlocn_precommitted;
+
+    rlocn = mdah->raw_locns;    /* Slot 0 */
+    rlocn_precommitted = rlocn + 1; /* Slot 1 */
+
+    /* Do not check non-existent metadata. */
+    if (!rlocn->offset && !rlocn->size)
+        return NULL;
+
+    if (!*vgname)
+        return rlocn;
+
+    if (!dev_read(dev_area->dev, dev_area->start + rlocn->offset,
+              sizeof(vgnamebuf), vgnamebuf))
+        goto bad;
+
+    if (!strncmp(vgnamebuf, vgname, len = strlen(vgname)) &&
+        (isspace(vgnamebuf[len]) || vgnamebuf[len] == '{'))
+        return rlocn;
+
+bad:
+	printk(">>>%s:%d\n", __func__, __LINE__);
+
+    return NULL;
+}
+
+static struct volume_group *alloc_vg(const char *vg_name)
+{
+    struct volume_group *vg;
+
+ //   if (!(vg = kzalloc(sizeof(*vg), GFP_KERNEL))) {
+    if (!(vg = dm_alloc(sizeof(*vg), true))) {
+		printk(">>>%s:%d\n", __func__, __LINE__);
+        return NULL;
+	}
+
+	vg->name = vg_name;
+    vg->system_id = "";
+    vg->alloc = ALLOC_NORMAL;
+	INIT_LIST_HEAD(&vg->pvs);
+	INIT_LIST_HEAD(&vg->pvs_to_create);
+	INIT_LIST_HEAD(&vg->pvs_outdated);
+	INIT_LIST_HEAD(&vg->lvs);
+	INIT_LIST_HEAD(&vg->tags);
+	INIT_LIST_HEAD(&vg->removed_lvs);
+	INIT_LIST_HEAD(&vg->removed_pvs);
+
+    return vg;
+}
+
+static int dm_config_get_uint32(const struct dm_config_node *cn, const char *path,
+             uint32_t *result)
+{
+    const struct dm_config_node *n;
+
+    n = dm_config_find_node(cn, path);
+
+    if (!n || !n->v || n->v->type != DM_CFG_INT)
+        return 0;
+
+    if (result)
+        *result = n->v->v.i;
+
+    return 1;
+}
+
+static int dm_config_get_uint64(const struct dm_config_node *cn, const char *path,
+             uint64_t *result)
+{
+    const struct dm_config_node *n;
+
+    n = dm_config_find_node(cn, path);
+
+    if (!n || !n->v || n->v->type != DM_CFG_INT)
+        return 0;
+
+    if (result)
+        *result = (uint64_t) n->v->v.i;
+
+    return 1;
+}
+
+#define _read_int32(root, path, result) \
+    dm_config_get_uint32(root, path, (uint32_t *) result) 
+             
+#define _read_uint32(root, path, result) \
+    dm_config_get_uint32(root, path, result)
+
+#define _read_uint64(root, path, result) \
+    dm_config_get_uint64(root, path, result)
+
+static int dm_config_get_section(const struct dm_config_node *cn, const char *path,
+              const struct dm_config_node **result)
+{
+    const struct dm_config_node *n;
+    
+    n = dm_config_find_node(cn, path);
+    if (!n || n->v)
+        return 0;
+            
+    if (result)
+        *result = n;
+
+    return 1;
+}
+
+static int dm_config_has_node(const struct dm_config_node *cn, const char *path)
+{       
+    return dm_config_find_node(cn, path) ? 1 : 0;
+} 
+
+struct str_node {
+	char *str;
+	struct list_head list;
+};
+
+static int str_list_match_item(const struct list_head *sll, const char *str)
+{
+	struct str_node *node;
+
+	list_for_each_entry(node, sll, list)
+        if (!strcmp(str, node->str))
+        	return 1;
+
+    return 0;
+}
+
+static int str_list_add_no_dup_check(struct list_head *sll, const char *str)
+{
+	struct str_node *node;
+    
+    if (!str)
+        return 0;
+    
+//	node = kmalloc(sizeof(struct str_node), GFP_KERNEL);
+	node = dm_alloc(sizeof(struct str_node), false);
+	if (!node)
+		return 0;
+    
+    node->str = str;
+
+    list_add(&node->list, sll);
+    
+    return 1;
+}
+
+static int str_list_add(struct list_head *sll, const char *str)
+{       
+    if (!str)
+        return 0;
+        
+    /* Already in list? */
+    if (str_list_match_item(sll, str))
+        return 1;
+
+	return str_list_add_no_dup_check(sll, str);
+}
+
+static int _read_str_list(struct list_head *list, const struct dm_config_value *cv)
+{
+    if (cv->type == DM_CFG_EMPTY_ARRAY)
+        return 1;
+
+    while (cv) {
+        if (cv->type != DM_CFG_STRING) {
+			printk(">>>%s:%d\n", __func__, __LINE__);
+          //  log_error("Found an item that is not a string");
+            return 0;
+        }
+
+        if (!str_list_add(list, dm_pool_strdup(cv->v.str)))
+            return 0;
+
+        cv = cv->next;
+    }
+
+    return 1;
+}
+
+typedef int (*section_fn) (struct format_instance *fid,
+               struct volume_group *vg, const struct dm_config_node *pvn,
+               const struct dm_config_node *vgn,
+               struct list_head *pv_hash,
+               struct list_head *lv_hash,
+               unsigned *scan_done_once,
+               unsigned report_missing_devices);
+
+
+static int _read_sections(struct format_instance *fid,
+              const char *section, section_fn fn,
+              struct volume_group *vg, const struct dm_config_node *vgn,
+              struct list_head *pv_hash,
+              struct list_head *lv_hash,
+              int optional,
+              unsigned *scan_done_once)
+{
+    const struct dm_config_node *n;
+    /* Only report missing devices when doing a scan */
+    unsigned report_missing_devices = scan_done_once ? !*scan_done_once : 1;
+
+    if (!dm_config_get_section(vgn, section, &n)) {
+        if (!optional) {
+            //log_error("Couldn't find section '%s'.", section);
+			printk(">>>%s:%d\n", __func__, __LINE__);
+            return 0;
+        }
+
+        return 1;
+    }
+
+    for (n = n->child; n; n = n->sib) {
+        if (!fn(fid, vg, n, vgn, pv_hash, lv_hash,
+            	scan_done_once, report_missing_devices))
+            return 0;
+    }
+
+    return 1;
+}
+
+static struct pv_segment *_alloc_pv_segment(struct physical_volume *pv,
+                        uint32_t pe, uint32_t len,
+                        struct lv_segment *lvseg,
+                        uint32_t lv_area)
+{
+    struct pv_segment *peg;
+
+//    if (!(peg = kzalloc(sizeof(*peg), GFP_KERNEL))) {
+    if (!(peg = dm_alloc(sizeof(*peg), true))) {
+		printk(">>>%s:%d\n", __func__, __LINE__);
+        return NULL;
+    }   
+              
+    peg->pv = pv;
+    peg->pe = pe;
+    peg->len = len;
+    peg->lvseg = lvseg;
+    peg->lv_area = lv_area;
+    
+    INIT_LIST_HEAD(&peg->list);
+    
+    return peg;
+} 
+
+static int alloc_pv_segment_whole_pv(struct physical_volume *pv)
+{           
+    struct pv_segment *peg;
+        
+    if (!pv->pe_count)
+        return 1;
+                
+    /* FIXME Cope with holes in PVs */
+    if (!(peg = _alloc_pv_segment(pv, 0, pv->pe_count, NULL, 0)))
+        return 0;
+                 
+    list_add(&peg->list, &pv->segments);
+
+    return 1;
+}
+
+struct pv_list {
+    struct list_head list;
+    struct physical_volume *pv;
+    struct list_head *mdas;   /* Metadata areas */
+    struct list_head *pe_ranges;  /* Ranges of PEs e.g. for allocation */
+}; 
+
+static int _read_pv(struct format_instance *fid,
+			struct volume_group *vg, const struct dm_config_node *pvn,
+            const struct dm_config_node *vgn __attribute__((unused)),
+            struct list_head *pv_hash,
+            struct list_head *lv_hash __attribute__((unused)),
+            unsigned *scan_done_once,
+            unsigned report_missing_devices)
+{
+    struct physical_volume *pv;
+    struct pv_list *pvl;
+    const struct dm_config_value *cv;
+    uint64_t size, ba_start;
+	struct pv_node *pv_node;
+	int found = 0;
+    int outdated = !strcmp(pvn->parent->key, "outdated_pvs");
+
+//    if (!(pvl = kzalloc(sizeof(*pvl), GFP_KERNEL)) ||
+    if (!(pvl = dm_alloc(sizeof(*pvl), true)))
+		return 0;
+
+  //  if (!(pvl->pv = kzalloc(sizeof(*pvl->pv), GFP_KERNEL)))
+    if (!(pvl->pv = dm_alloc(sizeof(*pvl->pv), true))) {
+		dm_free(pvl);
+        return 0;
+	}
+
+    pv = pvl->pv;
+
+	INIT_LIST_HEAD(&pv->list);
+	pv->pvn_key = pvn->key;
+	list_add(&pv->list, pv_hash);
+
+    if (!(pvn = pvn->child)) {
+  //      log_error("Empty pv section.");
+		printk(">>>%s:%d\n", __func__, __LINE__);
+        return 0;
+    }
+
+    if (!_read_id(&pv->id, pvn, "id")) {
+		printk(">>>%s:%d\n", __func__, __LINE__);
+        //log_error("Couldn't read uuid for physical volume.");
+        return 0;
+    }
+
+    pv->is_labelled = 1; /* All format_text PVs are labelled. */
+
+	list_for_each_entry(pv_node, &pv_head, list)
+		if (!strcmp(pv_node->pvid, pv->id.uuid)) {
+			pv->dev = pv_node->info->dev;
+			found = 1;
+		}
+
+	if (!found)
+		printk(">>>%s:%d\n", __func__, __LINE__);
+
+    if (!(pv->vg_name = dm_pool_strdup(vg->name)))
+        return 0;
+
+    memcpy(&pv->vgid, &vg->id, sizeof(vg->id));
+
+    if (!outdated && !_read_flag_config(pvn, &pv->status, PV_FLAGS)) {
+        //log_error("Couldn't read status flags for physical volume.");
+		printk(">>>%s:%d\n", __func__, __LINE__);
+        return 0;
+    }
+
+    if (!pv->dev)
+        pv->status |= MISSING_PV;
+
+    if ((pv->status & MISSING_PV) && pv->dev) {
+        pv->status &= ~MISSING_PV;
+        //log_info("Recovering a previously MISSING PV %s with no MDAs.",
+         //    pv_dev_name(pv));
+		printk(">>>%s:%d\n", __func__, __LINE__);
+    }
+
+    /* Late addition */
+    if (dm_config_has_node(pvn, "dev_size") &&
+        !_read_uint64(pvn, "dev_size", &pv->size)) {
+		printk(">>>%s:%d\n", __func__, __LINE__);
+        //log_error("Couldn't read dev size for physical volume.");
+        return 0;
+    }
+
+    if (!outdated && !_read_uint64(pvn, "pe_start", &pv->pe_start)) {
+		printk(">>>%s:%d\n", __func__, __LINE__);
+        //log_error("Couldn't read extent start value (pe_start) "
+         //     "for physical volume.");
+        return 0;
+    }
+
+    if (!outdated && !_read_int32(pvn, "pe_count", &pv->pe_count)) {
+        //log_error("Couldn't find extent count (pe_count) for "
+         //     "physical volume.");
+		printk(">>>%s:%d\n", __func__, __LINE__);
+        return 0;
+    }
+
+    /* Bootloader area is not compulsory - just log_debug for the record if found. */
+    ba_start = size = 0;
+    _read_uint64(pvn, "ba_start", &ba_start);
+    _read_uint64(pvn, "ba_size", &size);
+
+    if (ba_start && size) {
+        pv->ba_start = ba_start;
+        pv->ba_size = size;
+    } else if ((!ba_start && size) || (ba_start && !size)) {
+        //log_error("Found incomplete bootloader area specification "
+         //     "for PV %s in metadata.", pv_dev_name(pv));
+		printk(">>>%s:%d\n", __func__, __LINE__);
+        return 0;
+    }
+
+    //dm_list_init(&pv->tags);
+	INIT_LIST_HEAD(&pv->tags);
+    //dm_list_init(&pv->segments);
+	INIT_LIST_HEAD(&pv->segments);
+
+    /* Optional tags */
+    if (dm_config_get_list(pvn, "tags", &cv) &&
+        !(_read_str_list(&pv->tags, cv))) {
+		printk(">>>%s:%d\n", __func__, __LINE__);
+        //log_error("Couldn't read tags for physical volume %s in %s.",
+         //     pv_dev_name(pv), vg->name);
+        return 0;
+    }
+
+    pv->pe_size = vg->extent_size;
+
+    pv->pe_alloc_count = 0;
+    pv->pe_align = 0;
+
+    /* Fix up pv size if missing or impossibly large */
+    if ((!pv->size || pv->size > (1ULL << 62)) && pv->dev) {
+		pv->size = pv->dev->size;
+
+        size = pv->pe_count * (uint64_t) vg->extent_size + pv->pe_start;
+        if (size > pv->size)
+			printk(">>>%s:%d\n", __func__, __LINE__);
+           // log_warn("WARNING: Physical Volume %s is too large "
+            //     "for underlying device", pv_dev_name(pv));
+    }
+
+    if (!alloc_pv_segment_whole_pv(pv))
+        return 0;
+
+    vg->extent_count += pv->pe_count;
+    vg->free_count += pv->pe_count;
+
+	INIT_LIST_HEAD(&pvl->list);
+
+	printk(">>>%s:%d Added one pv key=%s\n", __func__, __LINE__, pv->pvn_key);
+
+    if (outdated)
+        list_add(&pvl->list, &vg->pvs_outdated);
+    else {
+		list_add(&pvl->list, &vg->pvs);
+		vg->pv_count++;
+		pvl->pv->vg = vg;
+		pvl->pv->fid = vg->fid;
+	}
+
+    return 1;
+}
+
+static struct logical_volume *alloc_lv(void)
+{   
+    struct logical_volume *lv;
+
+ //   if (!(lv = kzalloc(sizeof(*lv), GFP_KERNEL))) {
+    if (!(lv = dm_alloc(sizeof(*lv), true))) {
+      //  log_error("Unable to allocate logical volume structure");
+		printk(">>>%s:%d\n", __func__, __LINE__);
+        return NULL; 
+    }   
+
+    INIT_LIST_HEAD(&lv->snapshot_segs);
+    INIT_LIST_HEAD(&lv->segments);
+    INIT_LIST_HEAD(&lv->tags);
+    INIT_LIST_HEAD(&lv->segs_using_this_lv);
+    INIT_LIST_HEAD(&lv->rsites);
+    
+    return lv;
+}
+
+static const struct {
+    alloc_policy_t alloc;
+    const char str[14]; /* must be changed when size extends 13 chars */
+    const char repchar;
+} _policies[] = {
+    {ALLOC_CONTIGUOUS, "contiguous", 'c'},
+	{ALLOC_CLING, "cling", 'l'},
+	{ALLOC_CLING_BY_TAGS, "cling_by_tags", 't'},
+	{ALLOC_NORMAL, "normal", 'n'},
+	{ALLOC_ANYWHERE, "anywhere", 'a'},
+	{ALLOC_INHERIT, "inherit", 'i'}
+};
+
+static alloc_policy_t get_alloc_from_string(const char *str)
+{   
+    int i;
+        
+    /* cling_by_tags is part of cling */
+    if (!strcmp("cling_by_tags", str))
+        return ALLOC_CLING;
+    
+    for (i = 0; i < 6; i++)
+        if (!strcmp(_policies[i].str, str))
+            return _policies[i].alloc;
+                   
+    /* Special case for old metadata */
+    if (!strcmp("next free", str))
+        return ALLOC_NORMAL;
+
+    return ALLOC_INVALID;
+}
+
+#define UINT32_MAX     (4294967295U)
+#define DM_READ_AHEAD_AUTO UINT32_MAX   /* Use kernel default readahead */
+#define DM_READ_AHEAD_NONE 0        /* Disable readahead */
+
+#define DM_READ_AHEAD_MINIMUM_FLAG  0x1 /* Value supplied is minimum */
+
+struct lv_list {
+    struct list_head list;
+    struct logical_volume *lv;
+};
+
+static int link_lv_to_vg(struct volume_group *vg, struct logical_volume *lv)
+{
+    struct lv_list *lvl;
+
+  //  if (!(lvl = kzalloc(sizeof(*lvl), GFP_KERNEL)))
+    if (!(lvl = dm_alloc(sizeof(*lvl), true)))
+        return 0;
+
+	INIT_LIST_HEAD(&lvl->list);
+
+    lvl->lv = lv;
+    lv->vg = vg;
+
+    list_add(&lvl->list, &vg->lvs);
+
+    lv->status &= ~LV_REMOVED;
+
+    return 1;
+}
+
+
+#define lv_is_thin_volume(lv)   (((lv)->status & THIN_VOLUME) ? 1 : 0)
+#define lv_is_thin_pool(lv) (((lv)->status & THIN_POOL) ? 1 : 0)
+#define lv_is_external_origin(lv)   (((lv)->external_count > 0) ? 1 : 0)
+#define lv_is_thin_pool_data(lv)    (((lv)->status & THIN_POOL_DATA) ? 1 : 0)
+#define lv_is_thin_pool_metadata(lv)    (((lv)->status & THIN_POOL_METADATA) ? 1 : 0)
+#define lv_is_cache_pool_data(lv)   (((lv)->status & CACHE_POOL_DATA) ? 1 : 0)
+#define lv_is_cache_pool_metadata(lv)   (((lv)->status & CACHE_POOL_METADATA) ? 1 : 0)
+
+
+static int lv_is_origin(const struct logical_volume *lv)
+{
+    return lv->origin_count ? 1 : 0;
+}
+
+static int lv_is_cow(const struct logical_volume *lv)
+{
+    /* Make sure a merging thin origin isn't confused as a cow LV */
+    return (!lv_is_thin_volume(lv) && !lv_is_origin(lv) && lv->snapshot) ? 1 : 0;
+}
+
+/* Given a cow LV, return its origin */
+static struct logical_volume *origin_from_cow(const struct logical_volume *lv)
+{
+    if (lv->snapshot)
+        return lv->snapshot->origin;
+
+    return NULL;
+}
+
+static int lv_is_virtual_origin(const struct logical_volume *lv)
+{
+    return (lv->status & VIRTUAL_ORIGIN) ? 1 : 0;
+}
+
+static struct lv_segment *find_snapshot(const struct logical_volume *lv)
+{
+    return lv->snapshot;
+}
+
+static int lv_is_merging_cow(const struct logical_volume *snapshot)
+{
+    struct lv_segment *snap_seg = find_snapshot(snapshot);
+
+    /* checks lv_segment's status to see if cow is merging */
+    return (snap_seg && (snap_seg->status & MERGING)) ? 1 : 0;
+}
+
+#define lv_is_merging(lv)   (((lv)->status & MERGING) ? 1 : 0)
+
+static int lv_is_merging_origin(const struct logical_volume *origin)
+{
+    return lv_is_merging(origin);
+}
+
+
+static int lv_is_visible(const struct logical_volume *lv)
+{       
+    if (lv->status & SNAPSHOT)
+        return 0;
+        
+    return lv->status & VISIBLE_LV ? 1 : 0;
+}
+#define LOCKD_SANLOCK_LV_NAME "lvmlock"
+
+static int _read_lvnames(struct format_instance *fid __attribute__((unused)),
+             struct volume_group *vg, const struct dm_config_node *lvn,
+             const struct dm_config_node *vgn __attribute__((unused)),
+             struct list_head *pv_hash __attribute__((unused)),
+             struct list_head *lv_hash,
+             unsigned *scan_done_once __attribute__((unused)),
+             unsigned report_missing_devices __attribute__((unused)))
+{
+    struct logical_volume *lv;
+    const char *str;
+    const struct dm_config_value *cv;
+    const char *hostname;
+    uint64_t timestamp = 0, lvstatus;
+
+    if (!(lv = alloc_lv()))
+        return 0;
+
+    if (!(lv->name = dm_pool_strdup(lvn->key)))
+        return 0;
+
+    if (!(lvn = lvn->child)) {
+       // log_error("Empty logical volume section.");
+		printk(">>>%s:%d\n", __func__, __LINE__);
+        return 0;
+    }
+
+    if (!_read_flag_config(lvn, &lvstatus, LV_FLAGS)) {
+        //log_error("Couldn't read status flags for logical volume %s.",
+         //     lv->name);
+		printk(">>>%s:%d\n", __func__, __LINE__);
+        return 0;
+    }
+
+    if (lvstatus & LVM_WRITE_LOCKED) {
+        lvstatus |= LVM_WRITE;
+        lvstatus &= ~LVM_WRITE_LOCKED;
+    }
+
+    lv->status = lvstatus;
+
+    if (dm_config_has_node(lvn, "creation_time")) {
+        if (!_read_uint64(lvn, "creation_time", &timestamp)) {
+			printk(">>>%s:%d\n", __func__, __LINE__);
+           // log_error("Invalid creation_time for logical volume %s.",
+            //      lv->name);
+            return 0;
+        }
+        if (!dm_config_get_str(lvn, "creation_host", &hostname)) {
+			printk(">>>%s:%d\n", __func__, __LINE__);
+            //log_error("Couldn't read creation_host for logical volume %s.",
+             //     lv->name);
+            return 0;
+        }
+    } else if (dm_config_has_node(lvn, "creation_host")) {
+		printk(">>>%s:%d\n", __func__, __LINE__);
+       // log_error("Missing creation_time for logical volume %s.",
+        //      lv->name);
+        return 0;
+    }
+
+    if (dm_config_get_str(lvn, "lock_args", &str))
+        if (!(lv->lock_args = dm_pool_strdup(str)))
+            return 0;
+
+    lv->alloc = ALLOC_INHERIT;
+    if (dm_config_get_str(lvn, "allocation_policy", &str)) {
+        lv->alloc = get_alloc_from_string(str);
+        if (lv->alloc == ALLOC_INVALID) {
+       //     log_warn("WARNING: Ignoring unrecognised allocation policy %s for LV %s", str, lv->name);
+            lv->alloc = ALLOC_INHERIT;
+        }
+    }
+
+    if (!_read_int32(lvn, "read_ahead", &lv->read_ahead))
+        /* If not present, choice of auto or none is configurable */
+        lv->read_ahead = -1;
+    else {
+        switch (lv->read_ahead) {
+        case 0:
+            lv->read_ahead = DM_READ_AHEAD_AUTO;
+            break;
+        case (uint32_t) -1:
+            lv->read_ahead = DM_READ_AHEAD_NONE;
+            break;
+        default:
+            ;
+        }
+    }
+
+    /* Optional tags */
+    if (dm_config_get_list(lvn, "tags", &cv) &&
+        !(_read_str_list(&lv->tags, cv))) {
+		printk(">>>%s:%d\n", __func__, __LINE__);
+        return 0;
+    }
+
+	INIT_LIST_HEAD(&lv->list);
+	list_add(&lv->list, lv_hash);
+
+	printk(">>>%s:%d Added one lv name=%s\n", __func__, __LINE__, lv->name);
+
+    if (!link_lv_to_vg(vg, lv))
+        return 0;
+
+    if (!lv_is_visible(lv) && strstr(lv->name, "_pmspare")) {
+        if (vg->pool_metadata_spare_lv) {
+			printk(">>>%s:%d\n", __func__, __LINE__);
+            return 0;
+        }
+
+        lv->status |= POOL_METADATA_SPARE;
+        vg->pool_metadata_spare_lv = lv;
+    }
+
+    if (!lv_is_visible(lv) && !strcmp(lv->name, LOCKD_SANLOCK_LV_NAME)) {
+        lv->status |= LOCKD_SANLOCK_LV;
+        vg->sanlock_lv = lv;
+    }
+
+    return 1;
+}
+
+#define SEG_TYPE_NAME_STRIPED       "striped"
+#define SEG_CAN_SPLIT       0x0000000000000001ULL
+#define SEG_AREAS_STRIPED   0x0000000000000002ULL
+#define SEG_AREAS_MIRRORED  0x0000000000000004ULL
+#define SEG_FORMAT1_SUPPORT 0x0000000000000010ULL
+
+static struct segment_type *get_segtype_from_string(const char *str)
+{
+    struct segment_type *segtype;
+
+    //dm_list_iterate_items(segtype, &segtypes_head, list)
+	list_for_each_entry(segtype, &segtypes_head, list)
+        if (!strcmp(segtype->name, str))
+            return segtype;
+
+	printk(">>>%s:%d cannot support segtype=%s\n", __func__, __LINE__, str);
+
+	return NULL;
+}
+
+static struct lv_segment *alloc_lv_segment(
+					struct segment_type *segtype,
+                    struct logical_volume *lv,
+                    uint32_t le,
+					uint32_t len,
+                    uint32_t area_count,
+                    uint32_t area_len)
+{
+    struct lv_segment *seg;
+    uint32_t areas_sz = area_count * sizeof(*seg->areas);
+
+//    if (!(seg = kzalloc(sizeof(*seg), GFP_KERNEL)))
+    if (!(seg = dm_alloc(sizeof(*seg), true)))
+        return NULL;
+
+ //   if (!(seg->areas = kzalloc(areas_sz, GFP_KERNEL))) {
+    if (!(seg->areas = dm_alloc(areas_sz, GFP_KERNEL))) {
+//		kfree(seg);
+		dm_free(seg);
+        return NULL;
+    }
+
+    seg->segtype = segtype;
+    seg->lv = lv;
+    seg->le = le;
+    seg->len = len;
+    seg->area_count = area_count;
+    seg->area_len = area_len;
+
+    INIT_LIST_HEAD(&seg->tags);
+    INIT_LIST_HEAD(&seg->thin_messages);
+
+    return seg;
+}
+
+static void _insert_segment(struct logical_volume *lv, struct lv_segment *seg)
+{                        
+    struct lv_segment *comp;
+
+	list_for_each_entry(comp, &lv->segments, list) {
+        if (comp->le > seg->le) {
+            list_add_tail(&seg->list, &comp->list);
+            return; 
+        }
+    }
+
+    lv->le_count += seg->len;
+
+    list_add(&seg->list, &lv->segments);
+}  
+
+static int _read_segment(struct logical_volume *lv, const struct dm_config_node *sn,
+             struct list_head *pv_hash)
+{
+    uint32_t area_count = 0u;
+    struct lv_segment *seg;
+    const struct dm_config_node *sn_child = sn->child;
+    const struct dm_config_value *cv;
+    uint32_t start_extent, extent_count;
+    struct segment_type *segtype;
+    const char *segtype_str;
+
+    if (!sn_child) {
+		printk(">>>%s:%d\n", __func__, __LINE__);
+        //log_error("Empty segment section.");
+        return 0;
+    }
+
+    if (!_read_int32(sn_child, "start_extent", &start_extent)) {
+		printk(">>>%s:%d\n", __func__, __LINE__);
+        //log_error("Couldn't read 'start_extent' for segment '%s' "
+         //     "of logical volume %s.", sn->key, lv->name);
+        return 0;
+    }
+
+    if (!_read_int32(sn_child, "extent_count", &extent_count)) {
+		printk(">>>%s:%d\n", __func__, __LINE__);
+        //log_error("Couldn't read 'extent_count' for segment '%s' "
+         //     "of logical volume %s.", sn->key, lv->name);
+        return 0;
+    }
+
+    segtype_str = SEG_TYPE_NAME_STRIPED;
+
+    if (!dm_config_get_str(sn_child, "type", &segtype_str)) {
+   //     log_error("Segment type must be a string.");
+		printk(">>>%s:%d\n", __func__, __LINE__);
+        return 0;
+    }
+
+    if (!(segtype = get_segtype_from_string(segtype_str)))
+        return 0;
+
+    if (segtype->ops->text_import_area_count &&
+        !segtype->ops->text_import_area_count(sn_child, &area_count))
+        return 0; 
+
+
+    if (!(seg = alloc_lv_segment(segtype, lv, start_extent,
+                     extent_count, area_count,
+                     extent_count))) {
+		printk(">>>%s:%d\n", __func__, __LINE__);
+        //log_error("Segment allocation failed");
+        return 0;
+    }
+
+    if (seg->segtype->ops->text_import &&
+        !seg->segtype->ops->text_import(seg, sn_child, pv_hash))
+        return 0;
+
+    /* Optional tags */
+    if (dm_config_get_list(sn_child, "tags", &cv) &&
+        !(_read_str_list(&seg->tags, cv))) {
+		printk(">>>%s:%d\n", __func__, __LINE__);
+       // log_error("Couldn't read tags for a segment of %s/%s.",
+        //      lv->vg->name, lv->name);
+        return 0;
+    }
+
+
+	printk(">>>%s:%d Added one lvseg\n", __func__, __LINE__);
+
+    /*
+     * Insert into correct part of segment list.
+     */
+    _insert_segment(lv, seg);
+
+#if 0
+    if (seg_is_mirror(seg))
+        lv->status |= MIRROR;
+
+    if (seg_is_mirrored(seg))
+        lv->status |= MIRRORED;
+
+    if (seg_is_raid(seg))
+        lv->status |= RAID;
+
+    if (seg_is_virtual(seg))
+        lv->status |= VIRTUAL;
+
+    if (!seg_is_raid(seg) && _is_converting(lv))
+        lv->status |= CONVERTING;
+#endif
+
+    return 1;
+}
+
+static int _merge(struct lv_segment *first, struct lv_segment *second)
+{
+    if (!first || !second || first->segtype != second->segtype ||
+        !first->segtype->ops->merge_segments)
+        return 0;
+
+    return first->segtype->ops->merge_segments(first, second);
+}
+
+static int _read_segments(struct logical_volume *lv, const struct dm_config_node *lvn,
+              struct list_head *pv_hash)
+{
+    const struct dm_config_node *sn;
+    int count = 0, seg_count;
+	struct lv_segment *tmp, *seg, *prev = NULL;
+
+    for (sn = lvn; sn; sn = sn->sib) {
+        if (!sn->v) {
+            if (!_read_segment(lv, sn, pv_hash))
+                return 0;
+
+            count++;
+        }
+
+        if ((lv->status & SNAPSHOT) && count > 1) {
+			printk(">>>%s:%d\n", __func__, __LINE__);
+           // log_error("Only one segment permitted for snapshot");
+            return 0;
+        }
+    }
+
+    if (!_read_int32(lvn, "segment_count", &seg_count)) {
+		printk(">>>%s:%d\n", __func__, __LINE__);
+       // log_error("Couldn't read segment count for logical volume %s.",
+        //      lv->name);
+        return 0;
+    }
+
+    if (seg_count != count) {
+		printk(">>>%s:%d\n", __func__, __LINE__);
+        //log_error("segment_count and actual number of segments "
+         //     "disagree for logical volume %s.", lv->name);
+        return 0;
+    }
+
+    /*
+     * Check there are no gaps or overlaps in the lv.
+     */
+//    if (!check_lv_segments(lv, 0))
+ //       return 0;
+
+
+	list_for_each_entry_safe(seg, tmp, &lv->segments, list) {
+        if (_merge(prev, seg))
+			list_del_init(&seg->list);
+        else
+			prev = seg;
+	}  
+
+    return 1;
+}
+
+static int _read_lvsegs(struct format_instance *fid,
+            struct volume_group *vg, const struct dm_config_node *lvn,
+            const struct dm_config_node *vgn __attribute__((unused)),
+            struct list_head *pv_hash,
+            struct list_head *lv_hash,
+            unsigned *scan_done_once __attribute__((unused)),
+            unsigned report_missing_devices __attribute__((unused)))
+{
+    struct logical_volume *lv = NULL;
+	int found = 0;
+
+	list_for_each_entry(lv, lv_hash, list) {
+		if (!strcmp(lv->name, lvn->key)) {
+			found = 1;
+			break;
+		}
+	}
+
+	if (!found) {
+		printk(">>>%s:%d\n", __func__, __LINE__);
+        return 0;
+	}
+
+#if 0
+    if (!(lv = dm_hash_lookup(lv_hash, lvn->key))) {
+       // log_error("Lost logical volume reference %s", lvn->key);
+		printk(">>>%s:%d\n", __func__, __LINE__);
+        return 0;
+    }
+#endif
+
+    if (!(lvn = lvn->child)) {
+        //log_error("Empty logical volume section.");
+		printk(">>>%s:%d\n", __func__, __LINE__);
+        return 0;
+    }
+
+    /* FIXME: read full lvid */
+    if (!_read_id(&lv->lvid.id[1], lvn, "id")) {
+		printk(">>>%s:%d\n", __func__, __LINE__);
+        //log_error("Couldn't read uuid for logical volume %s.",
+         //     lv->name);
+        return 0;
+    }
+
+    memcpy(&lv->lvid.id[0], &lv->vg->id, sizeof(lv->lvid.id[0]));
+
+    if (!_read_segments(lv, lvn, pv_hash))
+        return 0;
+
+    lv->size = (uint64_t) lv->le_count * (uint64_t) vg->extent_size;
+    lv->minor = -1;
+    lv->major = -1;
+
+    if (lv->status & FIXED_MINOR) {
+        if (!_read_int32(lvn, "minor", &lv->minor)) {
+			printk(">>>%s:%d\n", __func__, __LINE__);
+           // log_error("Couldn't read minor number for logical "
+            //      "volume %s.", lv->name);
+            return 0;
+        }
+
+        if (!dm_config_has_node(lvn, "major"))
+            /* If major is missing, pick default */
+            lv->major = _dm_device_major;
+        else if (!_read_int32(lvn, "major", &lv->major)) {
+            //log_warn("WARNING: Couldn't read major number for logical "
+             //    "volume %s.", lv->name);
+			printk(">>>%s:%d\n", __func__, __LINE__);
+            lv->major = _dm_device_major;
+        }
+
+#if 0
+        if (!validate_major_minor(vg->cmd, fid->fmt, lv->major, lv->minor)) {
+			printk(">>>%s:%d\n", __func__, __LINE__);
+            //log_warn("WARNING: Ignoring invalid major, minor number for "
+             //    "logical volume %s.", lv->name);
+            lv->major = lv->minor = -1;
+        }
+#endif
+    }
+
+    return 1;
+}
+
+static void vg_set_fid(struct volume_group *vg,
+         struct format_instance *fid)
+{
+    struct pv_list *pvl;
+
+    if (fid == vg->fid)
+        return;
+
+//    if (fid)
+ //       fid->ref_count++;
+
+    //dm_list_iterate_items(pvl, &vg->pvs)
+	list_for_each_entry(pvl, &vg->pvs, list)
+     //   pv_set_fid(pvl->pv, fid);
+    	pvl->pv->fid = fid;
+
+//    dm_list_iterate_items(pvl, &vg->removed_pvs)
+ //       pv_set_fid(pvl->pv, fid);
+
+  //  if (vg->fid)
+   //     vg->fid->fmt->ops->destroy_instance(vg->fid);
+
+    vg->fid = fid;
+}
+
+
+static struct volume_group *_read_vg(struct format_instance *fid,
+                     struct dm_config_node *root)
+{
+    const struct dm_config_node *vgn;
+    const struct dm_config_value *cv;
+    const char *str, *format_str, *system_id;
+    struct volume_group *vg;
+    unsigned scan_done_once = 0;
+    uint64_t vgstatus;
+	struct list_head pv_hash;
+	struct list_head lv_hash;
+
+    /* skip any top-level values */
+    for (vgn = root; (vgn && vgn->v); vgn = vgn->sib) ;
+
+    if (!vgn) {
+		printk(">>>%s:%d\n", __func__, __LINE__);
+        return NULL;
+    }
+
+    if (!(vg = alloc_vg(vgn->key)))
+        return NULL;
+
+	INIT_LIST_HEAD(&pv_hash);
+	INIT_LIST_HEAD(&lv_hash);
+
+    vgn = vgn->child;
+
+    /* A backup file might be a backup of a different format */
+#if 0
+    if (dm_config_get_str(vgn, "format", &format_str) &&
+        !(vg->original_fmt = get_format_by_name(fid->fmt->cmd, format_str))) {
+		printk(">>>%s:%d\n", __func__, __LINE__);
+        goto bad;
+    }
+#endif
+
+    if (dm_config_get_str(vgn, "lock_type", &str))
+        if (!(vg->lock_type = dm_pool_strdup(str)))
+            goto bad;
+
+
+    if (dm_config_get_str(vgn, "lock_args", &str))
+        if (!(vg->lock_args = dm_pool_strdup(str)))
+            goto bad;
+
+
+    if (!_read_id(&vg->id, vgn, "id")) {
+		printk(">>>%s:%d\n", __func__, __LINE__);
+        goto bad;
+    }
+
+
+    if (!_read_int32(vgn, "seqno", &vg->seqno)) {
+		printk(">>>%s:%d\n", __func__, __LINE__);
+        goto bad;
+    }
+
+    if (!_read_flag_config(vgn, &vgstatus, VG_FLAGS)) {
+		printk(">>>%s:%d\n", __func__, __LINE__);
+        goto bad;
+    }
+
+    if (dm_config_get_str(vgn, "system_id", &system_id)) {
+        if (!(vgstatus & LVM_WRITE_LOCKED)) {
+         //   if (!(vg->lvm1_system_id = kzalloc(NAME_LEN + 1, GFP_KERNEL)))
+            if (!(vg->lvm1_system_id = dm_alloc(NAME_LEN + 1, true)))
+                goto bad;
+
+            strncpy(vg->lvm1_system_id, system_id, NAME_LEN);
+        } else if (!(vg->system_id = dm_pool_strdup(system_id))) {
+			printk(">>>%s:%d\n", __func__, __LINE__);
+            goto bad;
+        }
+    }
+
+    if (vgstatus & LVM_WRITE_LOCKED) {
+        vgstatus |= LVM_WRITE;
+        vgstatus &= ~LVM_WRITE_LOCKED;
+    }
+    vg->status = vgstatus;
+
+    if (!_read_int32(vgn, "extent_size", &vg->extent_size)) {
+		printk(">>>%s:%d\n", __func__, __LINE__);
+        goto bad;
+    }
+
+    if (!_read_int32(vgn, "max_lv", &vg->max_lv)) {
+		printk(">>>%s:%d\n", __func__, __LINE__);
+        goto bad;
+    }
+
+    if (!_read_int32(vgn, "max_pv", &vg->max_pv)) {
+		printk(">>>%s:%d\n", __func__, __LINE__);
+        goto bad;
+    }
+
+    if (dm_config_get_str(vgn, "allocation_policy", &str)) {
+        vg->alloc = get_alloc_from_string(str);
+        if (vg->alloc == ALLOC_INVALID) {
+			printk(">>>%s:%d\n", __func__, __LINE__);
+            vg->alloc = ALLOC_NORMAL;
+        }
+    }
+
+    if (!_read_uint32(vgn, "metadata_copies", &vg->mda_copies))
+        vg->mda_copies = 0;
+
+
+    if (!_read_sections(fid, "physical_volumes", _read_pv, vg,
+                vgn, &pv_hash, &lv_hash, 0, &scan_done_once)) {
+		printk(">>>%s:%d\n", __func__, __LINE__);
+        goto bad;
+    }
+
+    if (dm_config_has_node(vgn, "outdated_pvs"))
+		printk(">>>%s:%d\n", __func__, __LINE__);
+
+
+    /* Optional tags */
+    if (dm_config_get_list(vgn, "tags", &cv) &&
+        	!(_read_str_list(&vg->tags, cv))) {
+		printk(">>>%s:%d\n", __func__, __LINE__);
+        goto bad;
+    }
+
+
+    if (!_read_sections(fid, "logical_volumes", _read_lvnames, vg,
+                vgn, &pv_hash, &lv_hash, 1, NULL)) {
+		printk(">>>%s:%d\n", __func__, __LINE__);
+        goto bad;
+    }
+
+    if (!_read_sections(fid, "logical_volumes", _read_lvsegs, vg,
+                vgn, &pv_hash, &lv_hash, 1, NULL)) {
+		printk(">>>%s:%d\n", __func__, __LINE__);
+        goto bad;
+    }
+
+    vg_set_fid(vg, fid);
+
+    return vg;
+
+bad:
+    return NULL;
+}
+
+struct cached_vg_fmtdata {
+        uint32_t cached_mda_checksum;
+        size_t cached_mda_size;
+};
+
+static struct volume_group *text_vg_import_fd(struct format_instance *fid,
+                       struct cached_vg_fmtdata **vg_fmtdata,
+                       unsigned *use_previous_vg,
+                       struct hyper_rootdev_device *dev,
+                       off_t offset, uint32_t size,
+                       off_t offset2, uint32_t size2,
+                       uint32_t checksum)
+{
+    struct volume_group *vg = NULL;
+	struct dm_config_node *root;
+    int skip_parse;
+
+    if (vg_fmtdata && !*vg_fmtdata &&
+   //     	!(*vg_fmtdata = kzalloc(sizeof(struct cached_vg_fmtdata), GFP_KERNEL))) {
+        	!(*vg_fmtdata = dm_alloc(sizeof(struct cached_vg_fmtdata), true))) {
+		printk(">>>%s:%d\n", __func__, __LINE__);
+        return NULL;
+    }
+
+    /* Does the metadata match the already-cached VG? */
+    skip_parse = vg_fmtdata &&
+             ((*vg_fmtdata)->cached_mda_checksum == checksum) &&
+             ((*vg_fmtdata)->cached_mda_size == (size + size2));
+
+	if (!skip_parse)
+    	if (!config_file_read_fd(dev, offset, size,
+                     offset2, size2, &root))
+        	goto out;
+
+    if (skip_parse) {
+        if (use_previous_vg)
+            *use_previous_vg = 1;
+        goto out;
+    }
+
+    if (check_version(root))
+    	if (!(vg = _read_vg(fid, root)))
+        	goto out;
+
+    if (vg && vg_fmtdata && *vg_fmtdata) {
+        (*vg_fmtdata)->cached_mda_size = (size + size2);
+        (*vg_fmtdata)->cached_mda_checksum = checksum;
+    }
+
+    if (use_previous_vg)
+        *use_previous_vg = 0;
+
+out:
+    return vg;
+}
+
+
+static struct volume_group *_vg_read_raw(struct format_instance *fid,
+                     struct metadata_area *mda,
+                     struct cached_vg_fmtdata **vg_fmtdata,
+                     unsigned *use_previous_vg)
+{   
+    struct mda_context *mdac = (struct mda_context *) mda->metadata_locn;
+    struct volume_group *vg = NULL;
+    struct raw_locn *rlocn;
+    struct mda_header *mdah;
+    uint32_t wrap = 0;
+	struct device_area *area = &mdac->area;
+
+	if (!(mdah = kmalloc(MDA_HEADER_SIZE, GFP_KERNEL)))
+		goto out;
+
+    if (!raw_read_mda_header(mdah, area))
+        goto out;
+
+    if (!(rlocn = _find_vg_rlocn(area, mdah, fid->vgname))) {
+		printk(">>>%s:%d\n", __func__, __LINE__);
+        goto out;
+    }
+
+    if (rlocn->offset + rlocn->size > mdah->size)
+        wrap = (uint32_t) ((rlocn->offset + rlocn->size) - mdah->size);
+
+    if (wrap > rlocn->offset) {
+       // log_error("VG %s metadata too large for circular buffer",
+        //      vgname);
+		printk(">>>%s:%d\n", __func__, __LINE__);
+        goto out;
+    }
+
+    vg = text_vg_import_fd(fid, vg_fmtdata, use_previous_vg, area->dev,
+                     (off_t) (area->start + rlocn->offset),
+                     (uint32_t) (rlocn->size - wrap),
+                     (off_t) (area->start + MDA_HEADER_SIZE),
+                     wrap, rlocn->checksum);
+out:
+	kfree(mdah);
+    
+    return vg;
+}
+
+#define SEG_TYPE_NAME_LINEAR        "linear"
+
+static const char *_striped_name(const struct lv_segment *seg)
+{   
+    return (seg->area_count == 1) ? SEG_TYPE_NAME_LINEAR : seg->segtype->name;
+} 
+
+static int _striped_text_import_area_count(const struct dm_config_node *sn, uint32_t *area_count)
+{   
+    if (!dm_config_get_uint32(sn, "stripe_count", area_count)) {
+		printk(">>>%s:%d\n", __func__, __LINE__);
+        return 0;
+    }
+
+    return 1;
+}
+
+static struct logical_volume *find_lv(const struct volume_group *vg,
+                   const char *lv_name)
+{       
+    struct lv_list *lvl = NULL;
+    const char *ptr;
+	int found = 0;
+
+    /* Use last component */
+    if ((ptr = strrchr(lv_name, '/')))
+        ptr++;
+    else
+        ptr = lv_name;
+
+	list_for_each_entry(lvl, &vg->lvs, list)
+        if (!strcmp(lvl->lv->name, ptr)) {
+			found = 1;
+            break;
+		}
+
+    return found ? lvl->lv : NULL;
+} 
+
+#define seg_pvseg(seg, s)   (seg)->areas[(s)].u.pv.pvseg
+#define seg_dev(seg, s)     (seg)->areas[(s)].u.pv.pvseg->pv->dev
+#define seg_pe(seg, s)      (seg)->areas[(s)].u.pv.pvseg->pe
+#define seg_le(seg, s)      (seg)->areas[(s)].u.lv.le
+#define seg_metale(seg, s)  (seg)->meta_areas[(s)].u.lv.le
+
+#define seg_type(seg, s)    (seg)->areas[(s)].type
+#define seg_pv(seg, s)      (seg)->areas[(s)].u.pv.pvseg->pv
+#define seg_lv(seg, s)      (seg)->areas[(s)].u.lv.lv
+#define seg_metalv(seg, s)  (seg)->meta_areas[(s)].u.lv.lv
+#define seg_metatype(seg, s)    (seg)->meta_areas[(s)].type
+
+
+static struct pv_segment null_pv_segment = {
+    .pv = NULL,
+    .pe = 0,
+}; 
+
+static struct pv_segment *find_peg_by_pe(const struct physical_volume *pv,
+                     uint32_t pe)
+{
+    struct pv_segment *pvseg;
+
+    /* search backwards to optimise mostly used last segment split */
+    list_for_each_entry_reverse(pvseg, &pv->segments, list)
+        if (pe >= pvseg->pe && pe < pvseg->pe + pvseg->len)
+            return pvseg;
+
+    return NULL;
+}
+
+static struct pv_segment *_pv_split_segment(struct physical_volume *pv,
+                        struct pv_segment *peg,
+                        uint32_t pe)
+{
+    struct pv_segment *peg_new;
+
+    if (!(peg_new = _alloc_pv_segment(peg->pv, pe,
+                      peg->len + peg->pe - pe,
+                      NULL, 0)))
+        return NULL;
+
+    peg->len = peg->len - peg_new->len;
+
+    list_add(&peg_new->list, &peg->list);
+
+    if (peg->lvseg) {
+        peg->pv->pe_alloc_count -= peg_new->len;
+        peg->lvseg->lv->vg->free_count += peg_new->len;
+    }
+
+    return peg_new;
+}
+
+
+static int pv_split_segment(struct physical_volume *pv, uint32_t pe,
+             struct pv_segment **pvseg_allocated)
+{
+    struct pv_segment *pvseg, *pvseg_new = NULL;
+
+    if (pe == pv->pe_count)
+        goto out;
+
+    if (!(pvseg = find_peg_by_pe(pv, pe))) {
+		printk(">>>%s:%d\n", __func__, __LINE__);
+        //log_error("Segment with extent %" PRIu32 " in PV %s not found",
+         //     pe, pv_dev_name(pv));
+        return 0;
+    }
+
+    /* This is a peg start already */
+    if (pe == pvseg->pe) {
+        pvseg_new = pvseg;
+        goto out;
+    }
+
+    if (!(pvseg_new = _pv_split_segment(pv, pvseg, pe)))
+        return 0;
+out:
+    if (pvseg_allocated)
+        *pvseg_allocated = pvseg_new;
+
+    return 1;
+}
+
+
+static struct pv_segment *assign_peg_to_lvseg(struct physical_volume *pv,
+                       uint32_t pe, uint32_t area_len,
+                       struct lv_segment *seg,
+                       uint32_t area_num)
+{   
+    struct pv_segment *peg = NULL;
+    
+    /* Missing format1 PV */
+    if (!pv)
+        return &null_pv_segment;
+    
+    if (!pv_split_segment(pv, pe, &peg) ||
+        !pv_split_segment(pv, pe + area_len, NULL))
+        return NULL;
+    
+    if (!peg) {
+		printk(">>>%s:%d\n", __func__, __LINE__);
+        //log_error("Missing PV segment on %s at %u.",
+         //     pv_dev_name(pv), pe);
+        return NULL;
+    }
+    
+    peg->lvseg = seg;
+    peg->lv_area = area_num;
+    
+    peg->pv->pe_alloc_count += area_len;
+    peg->lvseg->lv->vg->free_count -= area_len;
+    
+    return peg;
+}
+
+
+static int set_lv_segment_area_pv(struct lv_segment *seg, uint32_t area_num,
+               struct physical_volume *pv, uint32_t pe)
+{                           
+    seg->areas[area_num].type = AREA_PV;
+
+	printk(">>>%s:%d\n", __func__, __LINE__);
+                
+    if (!(seg_pvseg(seg, area_num) =
+          assign_peg_to_lvseg(pv, pe, seg->area_len, seg, area_num)))
+        return 0; 
+                  
+    return 1;
+} 
+
+struct seg_list {
+    struct list_head list;
+    unsigned count;
+    struct lv_segment *seg;
+};      
+
+static int add_seg_to_segs_using_this_lv(struct logical_volume *lv,
+                  struct lv_segment *seg)
+{
+    struct seg_list *sl;
+
+	list_for_each_entry(sl, &lv->segs_using_this_lv, list) {
+        if (sl->seg == seg) {
+            sl->count++;
+            return 1;
+        }
+    }
+
+//    if (!(sl = kzalloc(sizeof(*sl), GFP_KERNEL))) {
+    if (!(sl = dm_alloc(sizeof(*sl), true))) {
+//        log_error("Failed to allocate segment list");
+        return 0;
+    }
+
+	INIT_LIST_HEAD(&sl->list);
+
+    sl->count = 1;
+    sl->seg = seg;
+    list_add(&sl->list, &lv->segs_using_this_lv);
+
+    return 1;
+}
+
+
+static int set_lv_segment_area_lv(struct lv_segment *seg, uint32_t area_num,
+               struct logical_volume *lv, uint32_t le,
+               uint64_t status)
+{
+#if 0
+    if (status & RAID_META) {
+        seg->meta_areas[area_num].type = AREA_LV;
+        seg_metalv(seg, area_num) = lv;
+        if (le) { 
+            log_error(INTERNAL_ERROR "Meta le != 0");
+            return 0;
+        }
+        seg_metale(seg, area_num) = 0;
+    } else {
+#endif
+        seg->areas[area_num].type = AREA_LV;
+        seg_lv(seg, area_num) = lv;
+        seg_le(seg, area_num) = le;
+ //   }
+
+    lv->status |= status;
+
+	printk(">>>%s:%d\n", __func__, __LINE__);
+
+    if (!add_seg_to_segs_using_this_lv(lv, seg))
+        return 0;
+
+    return 1;
+}
+
+static int text_import_areas(struct lv_segment *seg, const struct dm_config_node *sn,
+              const struct dm_config_value *cv, struct list_head *pv_hash,
+              uint64_t status)
+{
+    unsigned int s;
+    struct logical_volume *lv1;
+    struct physical_volume *pv;
+	int found = 0;
+
+    if (!seg->area_count) {
+		printk(">>>%s:%d\n", __func__, __LINE__);
+        //log_error("Zero areas not allowed for segment %s", seg_name);
+        return 0;
+    }
+
+    for (s = 0; cv && s < seg->area_count; s++, cv = cv->next) {
+        /* first we read the pv */
+        if (cv->type != DM_CFG_STRING) {
+			printk(">>>%s:%d\n", __func__, __LINE__);
+           // log_error("Bad volume name in areas array for segment %s.", seg_name);
+            return 0;
+        }
+
+        if (!cv->next) {
+			printk(">>>%s:%d\n", __func__, __LINE__);
+            //log_error("Missing offset in areas array for segment %s.", seg_name);
+            return 0;
+        }
+
+        if (cv->next->type != DM_CFG_INT) {
+			printk(">>>%s:%d\n", __func__, __LINE__);
+            //log_error("Bad offset in areas array for segment %s.", seg_name);
+            return 0;
+        }
+
+		list_for_each_entry(pv, pv_hash, list) {
+			if (!strcmp(cv->v.str, pv->pvn_key)) {
+				found = 1;
+				break;
+			}
+		}
+
+		if (found) {
+            if (!set_lv_segment_area_pv(seg, s, pv, (uint32_t)cv->next->v.i))
+                return 0;
+		} else if ((lv1 = find_lv(seg->lv->vg, cv->v.str))){
+            if (!set_lv_segment_area_lv(seg, s, lv1,
+                            (uint32_t)cv->next->v.i,
+                            status))
+                return 0;
+		} else {
+			printk(">>>%s:%d\n", __func__, __LINE__);
+            //log_error("Couldn't find volume '%s' "
+             //     "for segment '%s'.",
+              //    cv->v.str ? : "NULL", seg_name);
+            return 0;
+		}
+
+        cv = cv->next;
+    }
+
+    /*
+     * Check we read the correct number of stripes.
+     */
+    if (cv || (s < seg->area_count)) {
+		printk(">>>%s:%d\n", __func__, __LINE__);
+        //log_error("Incorrect number of areas in area array "
+         //     "for segment '%s'.", seg_name);
+        return 0;
+    }
+
+    return 1;
+}
+
+static int _striped_text_import(struct lv_segment *seg, const struct dm_config_node *sn,
+            struct list_head *pv_hash)
+{   
+    const struct dm_config_value *cv;
+    
+    if ((seg->area_count != 1) &&
+        !dm_config_get_uint32(sn, "stripe_size", &seg->stripe_size)) {
+		printk(">>>%s:%d\n", __func__, __LINE__);
+        //log_error("Couldn't read stripe_size for segment %s "
+         //     "of logical volume %s.", dm_config_parent_name(sn), seg->lv->name);
+        return 0;
+    }
+
+    if (!dm_config_get_list(sn, "stripes", &cv)) {
+		printk(">>>%s:%d\n", __func__, __LINE__);
+        //log_error("Couldn't find stripes array for segment %s "
+         //     "of logical volume %s.", dm_config_parent_name(sn), seg->lv->name);
+        return 0;
+    }
+
+    seg->area_len /= seg->area_count;
+
+    return text_import_areas(seg, sn, cv, pv_hash, 0);
+}
+
+static int list_size(struct list_head *head)
+{
+	int cnt = 0;
+	struct list_head *tmp;
+
+	list_for_each(tmp, head)
+		cnt++;
+
+	return cnt;
+}
+
+struct dm_str_list {
+    struct list_head list;
+    const char *str;
+};
+
+static int str_list_lists_equal(const struct list_head *sll, const struct list_head *sll2)
+{           
+    struct dm_str_list *sl;
+    struct dm_str_list *sl2;
+
+    if (list_size(sll) != list_size(sll2))
+        return 0;
+
+	list_for_each_entry(sl, sll, list)
+		list_for_each_entry(sl2, sll2, list)
+			if (strcmp(sl2->str, sl->str))
+        		return 0;
+
+    return 1;
+} 
+
+static int _striped_segments_compatible(struct lv_segment *first,
+                struct lv_segment *second)
+{
+    uint32_t width;
+    unsigned s;
+
+    if ((first->area_count != second->area_count) ||
+        (first->stripe_size != second->stripe_size))
+        return 0;
+
+    for (s = 0; s < first->area_count; s++) {
+        if ((seg_type(first, s) != AREA_PV) ||
+            (seg_type(second, s) != AREA_PV))
+            return 0;
+
+        width = first->area_len;
+
+        if ((seg_pv(first, s) !=
+             seg_pv(second, s)) ||
+            (seg_pe(first, s) + width !=
+             seg_pe(second, s)))
+            return 0;
+    }
+
+    if (!str_list_lists_equal(&first->tags, &second->tags))
+        return 0;
+
+    return 1;
+}
+
+static void merge_pv_segments(struct pv_segment *peg1, struct pv_segment *peg2)
+{
+    peg1->len += peg2->len;
+    
+   // dm_list_del(&peg2->list);
+	list_del_init(&peg2->list);
+}
+
+static int _striped_merge_segments(struct lv_segment *seg1, struct lv_segment *seg2)
+{
+    uint32_t s;
+
+    if (!_striped_segments_compatible(seg1, seg2))
+        return 0;
+
+    seg1->len += seg2->len;
+    seg1->area_len += seg2->area_len;
+
+    for (s = 0; s < seg1->area_count; s++)
+        if (seg_type(seg1, s) == AREA_PV)
+            merge_pv_segments(seg_pvseg(seg1, s),
+                      seg_pvseg(seg2, s));
+
+    return 1;
+}
+
+enum {
+    SEG_CACHE,
+    SEG_CRYPT,
+    SEG_ERROR,
+    SEG_LINEAR,
+    SEG_MIRRORED,
+    SEG_REPLICATOR,
+    SEG_REPLICATOR_DEV,
+    SEG_SNAPSHOT,
+    SEG_SNAPSHOT_ORIGIN,
+    SEG_SNAPSHOT_MERGE,
+    SEG_STRIPED,
+    SEG_ZERO,
+    SEG_THIN_POOL,
+    SEG_THIN,
+    SEG_RAID1,
+    SEG_RAID10,
+    SEG_RAID4,
+    SEG_RAID5_LA,
+    SEG_RAID5_RA,
+    SEG_RAID5_LS,
+    SEG_RAID5_RS,
+    SEG_RAID6_ZR,
+    SEG_RAID6_NR,
+    SEG_RAID6_NC,
+};
+
+struct load_segment {
+//    struct dm_list list;
+    struct list_head list;
+
+    unsigned type;
+
+    uint64_t size;
+
+    unsigned area_count;        /* Linear + Striped + Mirrored + Crypt + Replicator */
+//    struct dm_list areas;       /* Linear + Striped + Mirrored + Crypt + Replicator */
+    struct list_head areas;       /* Linear + Striped + Mirrored + Crypt + Replicator */
+
+    uint32_t stripe_size;       /* Striped + raid */
+
+    int persistent;         /* Snapshot */
+    uint32_t chunk_size;        /* Snapshot */
+    struct dm_tree_node *cow;   /* Snapshot */
+    struct dm_tree_node *origin;    /* Snapshot + Snapshot origin + Cache */
+    struct dm_tree_node *merge; /* Snapshot */
+
+    struct dm_tree_node *log;   /* Mirror + Replicator */
+    uint32_t region_size;       /* Mirror + raid */
+    unsigned clustered;     /* Mirror */
+    unsigned mirror_area_count; /* Mirror */
+    uint32_t flags;         /* Mirror + raid + Cache */
+    char *uuid;         /* Clustered mirror log */
+
+    const char *policy_name;    /* Cache */
+    unsigned policy_argc;       /* Cache */
+    struct dm_config_node *policy_settings; /* Cache */
+
+    const char *cipher;     /* Crypt */
+    const char *chainmode;      /* Crypt */
+    const char *iv;         /* Crypt */
+    uint64_t iv_offset;     /* Crypt */
+    const char *key;        /* Crypt */
+
+    const char *rlog_type;      /* Replicator */
+//    struct dm_list rsites;      /* Replicator */
+    struct list_head rsites;      /* Replicator */
+
+    unsigned rsite_count;       /* Replicator */
+    unsigned rdevice_count;     /* Replicator */
+    struct dm_tree_node *replicator;/* Replicator-dev */
+    uint64_t rdevice_index;     /* Replicator-dev */
+
+    uint64_t rebuilds;      /* raid */
+    uint64_t writemostly;       /* raid */
+    uint32_t writebehind;       /* raid */
+    uint32_t max_recovery_rate; /* raid kB/sec/disk */
+    uint32_t min_recovery_rate; /* raid kB/sec/disk */
+
+    struct dm_tree_node *metadata;  /* Thin_pool + Cache */
+    struct dm_tree_node *pool;  /* Thin_pool, Thin */
+    struct dm_tree_node *external;  /* Thin */
+
+   // struct dm_list thin_messages;   /* Thin_pool */
+    struct list_head thin_messages;   /* Thin_pool */
+
+    uint64_t transaction_id;    /* Thin_pool */
+    uint64_t low_water_mark;    /* Thin_pool */
+    uint32_t data_block_size;       /* Thin_pool + cache */
+    unsigned skip_block_zeroing;    /* Thin_pool */
+    unsigned ignore_discard;    /* Thin_pool target vsn 1.1 */
+    unsigned no_discard_passdown;   /* Thin_pool target vsn 1.1 */
+    unsigned error_if_no_space; /* Thin pool target vsn 1.10 */
+    unsigned read_only;     /* Thin pool target vsn 1.3 */
+    uint32_t device_id;     /* Thin */
+};
+
+static struct load_segment *_add_segment(struct dm_tree_node *dnode, unsigned type, uint64_t size)
+{
+    struct load_segment *seg;
+
+   // if (!(seg = kzalloc(sizeof(*seg), GFP_KERNEL)))
+    if (!(seg = dm_alloc(sizeof(*seg), true)))
+        return NULL;
+
+    seg->type = type;
+    seg->size = size;
+
+    INIT_LIST_HEAD(&seg->areas);
+    INIT_LIST_HEAD(&seg->list);
+
+    list_add(&seg->list, &dnode->props.segs);
+
+    dnode->props.segment_count++;
+
+    return seg;
+}
+
+
+
+static int dm_tree_node_add_linear_target(struct dm_tree_node *node,
+                   uint64_t size)
+{       
+    if (!_add_segment(node, SEG_LINEAR, size))
+        return 0;
+
+    return 1;    
+}
+
+static int dm_tree_node_add_striped_target(struct dm_tree_node *node,
+                    uint64_t size,
+                    uint32_t stripe_size)
+{   
+    struct load_segment *seg;
+
+    if (!(seg = _add_segment(node, SEG_STRIPED, size)))
+        return 0;
+
+    seg->stripe_size = stripe_size;
+
+    return 1;
+}
+
+static char *build_dm_uuid(const struct logical_volume *lv,
+            const char *layer);
+
+static struct dm_tree_node *dm_tree_find_node_by_uuid(struct dm_tree *dtree,
+                           const char *uuid)
+{
+    struct dm_tree_node *node;
+	int found = 0;
+
+    if (!uuid || !*uuid)
+        return &dtree->root;
+
+	list_for_each_entry(node, &dtree->uuids, uuid_hash_list) {
+		if (!strcmp(node->uuid, uuid)) {
+			found = 1;
+			break;
+		}
+	}
+
+	if (found)
+		return node;
+
+	return NULL;
+}
+
+static int _nodes_are_linked(const struct dm_tree_node *parent,
+                 const struct dm_tree_node *child);
+
+static int _link_nodes(struct dm_tree_node *parent,
+               struct dm_tree_node *child);
+
+static int dm_tree_node_num_children(const struct dm_tree_node *node, uint32_t inverted)
+{
+    if (inverted) {
+        if (_nodes_are_linked(&node->dtree->root, node))
+            return 0;
+        return list_size(&node->used_by);
+    }
+
+    if (_nodes_are_linked(node, &node->dtree->root))
+        return 0;
+
+    return list_size(&node->uses);
+}
+
+struct dm_tree_link {
+    struct list_head list;
+    struct dm_tree_node *node;
+};
+
+
+static void _unlink(struct list_head *head, struct dm_tree_node *node)
+{
+    struct dm_tree_link *dlink, *tmp;
+
+
+	list_for_each_entry_safe(dlink, tmp, head, list)
+        if (dlink->node == node) {
+			list_del_init(&dlink->list);
+            break;
+        }
+}
+
+static void _unlink_nodes(struct dm_tree_node *parent,
+              struct dm_tree_node *child)
+{
+    if (!_nodes_are_linked(parent, child))
+        return;
+
+    _unlink(&parent->uses, child);
+    _unlink(&child->used_by, parent);
+}
+
+
+static void _remove_from_toplevel(struct dm_tree_node *node)
+{
+    _unlink_nodes(&node->dtree->root, node);
+}
+
+static void _remove_from_bottomlevel(struct dm_tree_node *node)
+{
+    _unlink_nodes(node, &node->dtree->root);
+}
+
+static int _link_tree_nodes(struct dm_tree_node *parent, struct dm_tree_node *child)
+{
+    /* Don't link to root node if child already has a parent */
+    if (parent == &parent->dtree->root) {
+        if (dm_tree_node_num_children(child, 1))
+            return 1;
+    } else
+        _remove_from_toplevel(child);
+
+    if (child == &child->dtree->root) {
+        if (dm_tree_node_num_children(parent, 0))
+            return 1;
+    } else
+        _remove_from_bottomlevel(parent);
+
+    return _link_nodes(parent, child);
+}
+
+static struct dm_tree_node *_find_dm_tree_node(struct dm_tree *dtree,
+                           uint32_t major, uint32_t minor)
+{
+	struct dm_tree_node *node;
+	int found = 0;
+    dev_t dev = MKDEV((dev_t)major, (dev_t)minor);
+
+	list_for_each_entry(node, &dtree->devs, dev_hash_list) {
+		if (node->dev == dev) {
+			found = 1;
+			break;
+		}
+	}
+
+	if (found)
+		return node;
+
+	return NULL;
+}
+
+
+
+static struct dm_tree_node *_add_dev(struct dm_tree *dtree,
+                     struct dm_tree_node *parent,
+                     uint32_t major, uint32_t minor,
+                     uint16_t udev_flags,
+                     int implicit_deps)
+{
+    struct dm_info info;
+    const char *name = NULL;
+    const char *uuid = NULL;
+    struct dm_tree_node *node = NULL;
+    int new = 0;
+
+    /* Already in tree? */
+    if (!(node = _find_dm_tree_node(dtree, major, minor))) {
+        name = "";
+        uuid = "";
+        info.major = major;
+        info.minor = minor;
+
+        if (!(node = _create_dm_tree_node(dtree, name, uuid, &info,
+                          NULL, udev_flags)))
+            goto out;
+
+		printk(">>>%s:%d Added seg node name=%s uuid=%s dev=%lx major=%lu minor=%lu\n",
+			__func__, __LINE__, node->name, node->uuid, node->dev, major, minor);
+
+        new = 1;
+        node->implicit_deps = implicit_deps;
+    } else if (!implicit_deps && node->implicit_deps) {
+        node->udev_flags = udev_flags;
+        node->implicit_deps = 0;
+    }
+
+    if (!_link_tree_nodes(parent, node)) {
+        node = NULL;
+        goto out;
+    }
+
+    /* If node was already in tree, no need to recurse. */
+    if (!new)
+        goto out;
+
+    /* Can't recurse if not a mapped device or there are no dependencies */
+    if (!_add_to_bottomlevel(node))
+        node = NULL;
+
+out:
+    return node;
+}
+
+
+static struct list_head *dm_list_last(const struct list_head *head)
+{
+    return (list_empty(head) ? NULL : head->next);
+}  
+
+#define dm_list_struct_base(v, t, head) \
+    ((t *)((const char *)(v) - (const char *)&((t *) 0)->head))
+
+#define dm_list_item(v, t) dm_list_struct_base((v), t, list)
+
+struct seg_area {
+//    struct dm_list list;
+    struct list_head list;
+
+    struct dm_tree_node *dev_node;
+
+    uint64_t offset;
+
+    unsigned rsite_index;       /* Replicator site index */
+    struct dm_tree_node *slog;  /* Replicator sync log node */
+    uint64_t region_size;       /* Replicator sync log size */
+    uint32_t flags;         /* Replicator sync log flags */
+};
+
+static int _add_area(struct dm_tree_node *node,
+		struct load_segment *seg, struct dm_tree_node *dev_node, uint64_t offset)
+{
+    struct seg_area *area;
+
+//    if (!(area = kzalloc(sizeof (*area), GFP_KERNEL)))
+    if (!(area = dm_alloc(sizeof (*area), true)))
+        return 0;
+
+    area->dev_node = dev_node;
+    area->offset = offset;
+	INIT_LIST_HEAD(&area->list);
+
+    list_add(&area->list, &seg->areas);
+    seg->area_count++;
+
+    return 1;
+}
+
+static int dm_tree_node_add_target_area(struct dm_tree_node *node,
+                 const char *dev_name,
+                 const char *uuid,
+                 uint64_t offset)
+{
+    struct load_segment *seg;
+    struct dm_tree_node *dev_node;
+
+    if ((!dev_name || !*dev_name) && (!uuid || !*uuid)) {
+		printk(">>>%s:%d\n", __func__, __LINE__);
+        return 0;
+    }
+
+
+    if (uuid) {
+        if (!(dev_node = dm_tree_find_node_by_uuid(node->dtree, uuid))) {
+           // log_error("Couldn't find area uuid %s.", uuid);
+			printk(">>>%s:%d\n", __func__, __LINE__);
+            return 0;
+        }
+
+        if (!_link_tree_nodes(node, dev_node))
+            return 0;
+    } else {
+		struct __old_kernel_stat info;
+
+		if (sys_stat(dev_name, (struct __old_kernel_stat __user *)&info) < 0) {
+			printk(">>>%s:%d\n", __func__, __LINE__);
+			return 0;
+		}
+
+        if (!S_ISBLK(info.st_mode)) {
+			printk(">>>%s:%d\n", __func__, __LINE__);
+            //log_error("Device %s is not a block device.", dev_name);
+            return 0;
+        }
+
+        /* FIXME Check correct macro use */
+        if (!(dev_node = _add_dev(node->dtree, node, LVM_MAJOR(info.st_rdev),
+                     LVM_MINOR(info.st_rdev), 0, 0)))
+            return 0;
+    }
+
+    if (!node->props.segment_count) {
+		printk(">>>%s:%d\n", __func__, __LINE__);
+       // log_error(INTERNAL_ERROR "Attempt to add target area to missing segment.");
+        return 0;
+    }
+
+    seg = dm_list_item(dm_list_last(&node->props.segs), struct load_segment);
+
+    if (!_add_area(node, seg, dev_node, offset))
+        return 0;
+
+    return 1;
+}
+
+
+
+
+static int add_areas_line(struct dev_manager *dm, struct lv_segment *seg,
+           struct dm_tree_node *node, uint32_t start_area,
+           uint32_t areas)
+{
+    uint64_t extent_size = seg->lv->vg->extent_size;
+    uint32_t s;
+    char *dlid;
+    const char *name;
+    unsigned num_error_areas = 0;
+    unsigned num_existing_areas = 0;
+
+    for (s = start_area; s < areas; s++) {
+        if ((seg_type(seg, s) == AREA_PV &&
+             (!seg_pvseg(seg, s) || !seg_pv(seg, s) || !seg_dev(seg, s) ||
+               !(name = seg_dev(seg, s)->path) || !*name)) ||
+            (seg_type(seg, s) == AREA_LV && !seg_lv(seg, s))) {
+            num_error_areas++;
+        } else if (seg_type(seg, s) == AREA_PV) {
+            if (!dm_tree_node_add_target_area(node, seg_dev(seg, s)->path, NULL,
+                    (seg_pv(seg, s)->pe_start + (extent_size * seg_pe(seg, s)))))
+                return 0;
+
+            num_existing_areas++;
+        } else if (seg_type(seg, s) == AREA_LV) {
+            if (!(dlid = build_dm_uuid(seg_lv(seg, s), NULL)))
+                return 0;
+
+            if (!dm_tree_node_add_target_area(node, NULL, dlid, extent_size * seg_le(seg, s)))
+                return 0;
+        } else {
+			printk(">>>%s:%d\n", __func__, __LINE__);
+            //log_error(INTERNAL_ERROR "Unassigned area found in LV %s.",
+             //     seg->lv->name);
+            return 0;
+        }
+    }
+
+    if (num_error_areas) {
+        /* Thins currently do not support partial activation */
+        if (lv_is_thin_type(seg->lv)) {
+			printk(">>>%s:%d\n", __func__, __LINE__);
+         //   log_error("Cannot activate %s%s: pool incomplete.",
+          //        seg->lv->vg->name, seg->lv->name);
+            return 0;
+        }
+    }
+
+    return 1;
+}
+
+
+
+
+static int _striped_add_target_line(struct dev_manager *dm,
+                struct lv_segment *seg,
+                struct dm_tree_node *node, uint64_t len)
+{   
+    if (!seg->area_count) {
+		printk(">>>%s:%d\n", __func__, __LINE__);
+        return 0;
+    }
+
+    if (seg->area_count == 1) {
+        if (!dm_tree_node_add_linear_target(node, len))
+            return 0;
+    } else if (!dm_tree_node_add_striped_target(node, len,
+                          seg->stripe_size))
+        return 0;
+    
+    return add_areas_line(dm, seg, node, 0u, seg->area_count);
+}
+
+
+static struct segtype_handler _striped_ops = {
+    .name = _striped_name,
+ //   .display = _striped_display,
+    .text_import_area_count = _striped_text_import_area_count,
+    .text_import = _striped_text_import,
+//    .text_export = _striped_text_export,
+    .merge_segments = _striped_merge_segments,
+    .add_target_line = _striped_add_target_line,
+  //  .target_present = _striped_target_present,
+  //  .destroy = _striped_destroy,
+};
+
+static int _lv_is_exclusive(struct logical_volume *lv)
+{
+    struct lv_segment *seg;
+
+    /* Some seg types require exclusive activation */
+    /* FIXME Scan recursively */
+    //dm_list_iterate_items(seg, &lv->segments)
+	list_for_each_entry(seg, &lv->segments, list)
+        if (seg_only_exclusive(seg))
+            return 1;
+    
+    /* Origin has no seg type require exlusiveness */
+    return lv_is_origin(lv);
+} 
+
+
+static struct dm_tree *dm_tree_create(void)
+{   
+    struct dm_tree *dtree;
+        
+   // if(!(dtree = kzalloc(sizeof(*dtree), GFP_KERNEL)))
+    if(!(dtree = dm_alloc(sizeof(*dtree), true)))
+		return NULL;
+    
+    dtree->root.dtree = dtree;
+
+    INIT_LIST_HEAD(&dtree->root.uses);
+    INIT_LIST_HEAD(&dtree->root.used_by);
+    INIT_LIST_HEAD(&dtree->root.activated);
+
+    dtree->skip_lockfs = 0;
+    dtree->no_flush = 0;
+    dtree->optional_uuid_suffixes = NULL;
+
+
+    INIT_LIST_HEAD(&dtree->devs);
+    INIT_LIST_HEAD(&dtree->uuids);
+
+    return dtree;
+}
+
+static struct lv_segment *first_seg(const struct logical_volume *lv) 
+{
+    struct lv_segment *seg;
+
+	list_for_each_entry(seg, &lv->segments, list)
+        return seg; 
+
+    return NULL;
+}
+
+static const char *lv_layer(const struct logical_volume *lv)
+{       
+    if (lv_is_thin_pool(lv))
+        return "tpool"; 
+    
+    return NULL;
+} 
+
+#define lv_is_cache(lv)     (((lv)->status & CACHE) ? 1 : 0)
+#define lv_is_pending_delete(lv) (((lv)->status & LV_PENDING_DELETE) ? 1 : 0)
+
+
+static const char *uuid_suffix_list[] =
+		{ "pool", "cdata", "cmeta", "tdata", "tmeta", NULL};
+
+static struct dm_tree *_create_partial_dtree(struct dev_manager *dm,
+		const struct logical_volume *lv)
+{   
+    struct dm_tree *dtree;
+
+    if (!(dtree = dm_tree_create()))
+        return NULL;
+    
+	dtree->optional_uuid_suffixes = &uuid_suffix_list[0];
+    
+    return dtree;
+}
+
+#if 0
+struct dm_tree_node *dm_tree_find_node(struct dm_tree *dtree,
+                       uint32_t major,
+                       uint32_t minor)
+{   
+    if (!major && !minor)
+        return &dtree->root;
+    
+    return _find_dm_tree_node(dtree, major, minor);
+} 
+#endif
+
+static void _count_chars(const char *str, size_t *len, int *count,
+             const int c1, const int c2)
+{
+    const char *ptr;
+
+    for (ptr = str; *ptr; ptr++, (*len)++)
+        if (*ptr == c1 || *ptr == c2)
+            (*count)++;
+}
+
+static void _quote_characters(char **out, const char *src,
+                  const int orig_char, const int quote_char,
+                  int quote_quote_char)
+{
+    while (*src) {
+        if (*src == orig_char ||
+            (*src == quote_char && quote_quote_char))
+            *(*out)++ = quote_char;
+
+        *(*out)++ = *src++;
+    }
+}
+
+static void _quote_hyphens(char **out, const char *src)
+{
+    _quote_characters(out, src, '-', '-', 0);
+}
+
+static char *dm_build_dm_name(const char *vgname,
+               const char *lvname, const char *layer)
+{
+    size_t len = 1;
+    int hyphens = 1;
+    char *r, *out;
+
+    _count_chars(vgname, &len, &hyphens, '-', 0);
+    _count_chars(lvname, &len, &hyphens, '-', 0);
+
+    len += hyphens;
+
+//    if (!(r = kmalloc(len, GFP_KERNEL)))
+    if (!(r = dm_alloc(len, false)))
+        return NULL;
+
+    out = r;
+    _quote_hyphens(&out, vgname);
+    *out++ = '-';
+    _quote_hyphens(&out, lvname);
+
+    *out = '\0';
+
+    return r;
+}
+
+struct lv_layer {
+    const struct logical_volume *lv; 
+    const char *old_name;
+};
+
+static int read_only_lv(const struct logical_volume *lv)
+{
+    return !(lv->status & LVM_WRITE);
+}
+
+static struct dm_tree_node *_create_dm_tree_node(struct dm_tree *dtree,
+                         const char *name,
+                         const char *uuid,
+                         struct dm_info *info,
+                         void *context,
+                         uint16_t udev_flags)
+{
+    struct dm_tree_node *node;
+    dev_t dev;
+
+   // if (!(node = kzalloc(sizeof(*node), GFP_KERNEL)))
+    if (!(node = dm_alloc(sizeof(*node), true)))
+        return NULL;
+
+    node->dtree = dtree;
+
+    node->name = name;
+    node->uuid = uuid;
+    node->info = *info;
+    node->context = context;
+    node->udev_flags = udev_flags;
+
+    INIT_LIST_HEAD(&node->uses);
+    INIT_LIST_HEAD(&node->used_by);
+    INIT_LIST_HEAD(&node->activated);
+    INIT_LIST_HEAD(&node->props.segs);
+
+    INIT_LIST_HEAD(&node->dev_hash_list);
+    INIT_LIST_HEAD(&node->uuid_hash_list);
+
+    dev = LVM_MKDEV((dev_t)info->major, (dev_t)info->minor);
+	node->dev = dev;
+
+	list_add(&node->dev_hash_list, &dtree->devs);
+
+	if (*uuid)
+		list_add(&node->uuid_hash_list, &dtree->uuids);
+
+    return node;
+}
+
+static int _link(struct list_head *list, struct dm_tree_node *node)
+{   
+    struct dm_tree_link *dlink;
+    
+   // if (!(dlink = kzalloc(sizeof(*dlink), GFP_KERNEL))) {
+    if (!(dlink = dm_alloc(sizeof(*dlink), true))) {
+      //  log_error("dtree link allocation failed");
+        return 0;
+    }
+
+	INIT_LIST_HEAD(&dlink->list);
+    
+    dlink->node = node;
+    list_add(&dlink->list, list);
+    
+    return 1;
+}
+
+static int _nodes_are_linked(const struct dm_tree_node *parent,
+                 const struct dm_tree_node *child)
+{
+    struct dm_tree_link *dlink;
+
+	list_for_each_entry(dlink, &parent->uses, list)
+        if (dlink->node == child)
+            return 1;
+
+    return 0;
+}
+
+static int _link_nodes(struct dm_tree_node *parent,
+               struct dm_tree_node *child)
+{
+    if (_nodes_are_linked(parent, child))
+        return 1;
+
+    if (!_link(&parent->uses, child))
+        return 0;
+
+    if (!_link(&child->used_by, parent))
+        return 0;
+
+    return 1;
+}
+
+static int _add_to_toplevel(struct dm_tree_node *node)
+{
+    return _link_nodes(&node->dtree->root, node);
+}
+
+static int _add_to_bottomlevel(struct dm_tree_node *node)
+{
+    return _link_nodes(node, &node->dtree->root);
+}
+
+static struct dm_tree_node *dm_tree_add_new_dev_with_udev_flags(struct dm_tree *dtree,
+                             const char *name,
+                             const char *uuid,
+                             uint32_t major,
+                             uint32_t minor,
+                             int read_only,
+                             int clear_inactive,
+                             void *context,
+                             uint16_t udev_flags)
+{
+    struct dm_tree_node *dnode;
+    struct dm_info info = { 0 };
+    const char *name2;
+    const char *uuid2;
+
+    /* Do we need to add node to tree? */
+    if (!(name2 = dm_pool_strdup(name)))
+        return NULL;
+
+    if (!(uuid2 = dm_pool_strdup(uuid)))
+        return NULL;
+
+    if (!(dnode = _create_dm_tree_node(dtree, name2, uuid2, &info,
+                           context, 0)))
+        return NULL;
+
+	printk(">>>%s:%d Added lv node name=%s uuid=%s dev=%lx\n",
+		__func__, __LINE__, dnode->name, dnode->uuid, dnode->dev);
+
+    /* Attach to root node until a table is supplied */
+    if (!_add_to_toplevel(dnode) || !_add_to_bottomlevel(dnode))
+        return NULL;
+
+    dnode->props.major = major;
+    dnode->props.minor = minor;
+
+    dnode->props.read_only = read_only ? 1 : 0;
+    dnode->props.read_ahead = DM_READ_AHEAD_AUTO;
+    dnode->props.read_ahead_flags = 0;
+
+    dnode->context = context;
+
+    return dnode;
+}
+
+static int _add_new_lv_to_dtree(struct dev_manager *dm, struct dm_tree *dtree,
+                const struct logical_volume *lv, struct lv_activate_opts *laopts,
+                const char *layer);
+
+
+static int _add_segment_to_dtree(struct dev_manager *dm,
+                 struct dm_tree *dtree,
+                 struct dm_tree_node *dnode,
+                 struct lv_segment *seg,
+                 struct lv_activate_opts *laopts)
+{
+    uint32_t s;
+    uint64_t extent_size;
+
+    /* Add any LVs used by this segment */
+    for (s = 0; s < seg->area_count; ++s)
+        if ((seg_type(seg, s) == AREA_LV) &&
+               !_add_new_lv_to_dtree(dm, dtree, seg_lv(seg, s), laopts, NULL))
+            return 0;
+
+    extent_size = seg->lv->vg->extent_size;
+	if (!seg->segtype->ops->add_target_line(dm, seg, dnode, extent_size * seg->len))
+        return 0;
+
+    return 1;
+}
+
+
+static int _dev_read_ahead_dev(struct hyper_rootdev_device *dev, uint32_t *read_ahead)
+{
+    long read_ahead_long;
+
+    if (dev->read_ahead != -1) {
+        *read_ahead = (uint32_t) dev->read_ahead;
+        return 1;
+    }
+
+    if (sys_ioctl(dev->fd, BLKRAGET, (uint64_t)&read_ahead_long) < 0)
+        return 0;
+
+    *read_ahead = (uint32_t) read_ahead_long;
+    dev->read_ahead = read_ahead_long;
+
+    return 1;
+}
+
+static int _lv_read_ahead_single(struct logical_volume *lv, void *data)
+{
+    struct lv_segment *seg = first_seg(lv);
+    uint32_t seg_read_ahead = 0, *read_ahead = data;
+
+    if (seg && seg->area_count && seg_type(seg, 0) == AREA_PV)
+		_dev_read_ahead_dev(seg_pv(seg, 0)->dev, &seg_read_ahead);
+
+    if (seg_read_ahead > *read_ahead)
+        *read_ahead = seg_read_ahead;
+
+    return 1;
+}
+
+
+static int _add_new_lv_to_dtree(struct dev_manager *dm, struct dm_tree *dtree,
+                const struct logical_volume *lv, struct lv_activate_opts *laopts,
+                const char *layer)
+{
+    struct lv_segment *seg;
+    struct lv_layer *lvlayer;
+    struct dm_tree_node *dnode;
+    char *name, *dlid;
+    uint32_t max_stripe_size = 0;
+    uint32_t read_ahead = lv->read_ahead;
+    uint32_t read_ahead_flags = 0;
+
+    if (!(name = dm_build_dm_name(lv->vg->name, lv->name, NULL)))
+        return 0;
+
+    if (!(dlid = build_dm_uuid(lv, NULL)))
+        return 0;
+
+//    if (!(lvlayer = kzalloc(sizeof(*lvlayer), GFP_KERNEL)))
+    if (!(lvlayer = dm_alloc(sizeof(*lvlayer), true)))
+        return 0;
+
+    lvlayer->lv = lv;
+
+    if (!(dnode = dm_tree_add_new_dev_with_udev_flags(dtree, name, dlid,
+                         (uint32_t) lv->major,
+                         (uint32_t) lv->minor,
+                         read_only_lv(lv), 0, lvlayer, 0)))
+        return 0;
+
+    /* Store existing name so we can do rename later */
+    lvlayer->old_name = "";
+
+    /* Create table */
+    dm->pvmove_mirror_count = 0u;
+
+    /* Add 'real' segments for LVs */
+	list_for_each_entry(seg, &lv->segments, list) {
+        if (!_add_segment_to_dtree(dm, dtree, dnode, seg, laopts))
+            return 0;
+
+        if (max_stripe_size < seg->stripe_size * seg->area_count)
+            max_stripe_size = seg->stripe_size * seg->area_count;
+    }
+
+
+    if (read_ahead == DM_READ_AHEAD_AUTO) {
+        read_ahead = max_stripe_size * 2;
+
+        if (!read_ahead)
+			_lv_read_ahead_single(lv, &read_ahead);
+
+        read_ahead_flags = DM_READ_AHEAD_MINIMUM_FLAG;
+    }
+
+    dnode->props.read_ahead = read_ahead;
+    dnode->props.read_ahead_flags = read_ahead_flags;
+
+    return 1;
+}
+
+
+static int dm_task_get_info(struct dm_ioctl *param, struct dm_info *info)
+{
+    memset(info, 0, sizeof(*info));
+
+    info->exists = param->flags & DM_EXISTS_FLAG ? 1 : 0;
+    if (!info->exists)
+        return 1; 
+                  
+    info->suspended = param->flags & DM_SUSPEND_FLAG ? 1 : 0;
+    info->read_only = param->flags & DM_READONLY_FLAG ? 1 : 0;
+    info->live_table = param->flags & DM_ACTIVE_PRESENT_FLAG ? 1 : 0;
+    info->inactive_table = param->flags & DM_INACTIVE_PRESENT_FLAG ? 1 : 0;
+    info->deferred_remove = param->flags & DM_DEFERRED_REMOVE;
+    info->internal_suspend = (param->flags & DM_INTERNAL_SUSPEND_FLAG) ? 1 : 0;
+    info->target_count = param->target_count;
+    info->open_count = param->open_count;
+    info->event_nr = param->event_nr;
+    info->major = LVM_MAJOR(param->dev);
+    info->minor = LVM_MINOR(param->dev);
+
+    return 1;
+}
+
+static int _create_node(struct dm_tree_node *dnode)
+{
+    int r = 0;
+	struct dm_ioctl param = { 0 };
+	struct dm_info *info;
+
+	printk(">>>%s:%d name=%s uuid=%s dev=%lx major=%lx ro=%d\n", __func__, __LINE__,
+		dnode->name, dnode->uuid, dnode->dev, dnode->props.major, dnode->props.read_only);
+
+	strncpy(param.name, dnode->name, sizeof(param.name));
+	strncpy(param.uuid, dnode->uuid, sizeof(param.uuid));
+	//param.uuid = dnode->uuid;
+	param.flags = DM_EXISTS_FLAG | DM_SKIP_BDGET_FLAG;
+
+	if (dnode->props.read_only)
+		param.flags |= DM_READONLY_FLAG;
+
+	my_dev_create(&param);
+
+	r = dm_task_get_info(&param, &dnode->info);
+
+    return r;
+}
+
+#define EMIT_PARAMS(p, str...)\
+do {\
+    int w;\
+    if ((w = snprintf(params + p, paramsize - (size_t) p, str)) < 0) \
+        return -1;\
+    p += w;\
+} while (0)
+
+
+static int dm_format_dev(char *buf, int bufsize, uint32_t dev_major,
+          uint32_t dev_minor)
+{             
+    int r;    
+        
+    if (bufsize < 8)
+        return 0;
+    
+    r = snprintf(buf, (size_t) bufsize, "%u:%u", dev_major, dev_minor);
+    if (r < 0 || r > bufsize - 1)
+        return 0;
+
+    return 1;
+}
+
+static int _build_dev_string(char *devbuf, size_t bufsize, struct dm_tree_node *node)
+{
+    int r;    
+        
+    if (bufsize < 8)
+        return 0;
+
+	dev_t dev = node->dev;
+
+//	printk(">>>%s:%d major=%lx minor=%lx\n", __func__, __LINE__, LVM_MAJOR(dev), LVM_MINOR(dev));
+    
+    r = snprintf(devbuf, (size_t)bufsize, "%u:%u", LVM_MAJOR(dev), LVM_MINOR(dev));
+    if (r < 0 || r > bufsize - 1)
+        return 0;
+
+    return 1;
+} 
+
+struct dm_task {
+    struct target *head, *tail;
+};
+
+#define DM_FORMAT_DEV_BUFSIZE   13  /* Minimum bufsize to handle worst case. */
+
+static int _emit_areas_line(struct load_segment *seg, char *params,
+                size_t paramsize, int *pos)
+{
+    struct seg_area *area;
+    char devbuf[DM_FORMAT_DEV_BUFSIZE];
+    unsigned first_time = 1;
+    const char *logtype, *synctype;
+
+//    dm_list_iterate_items(area, &seg->areas) {
+	list_for_each_entry(area, &seg->areas, list) {
+        if (!_build_dev_string(devbuf, sizeof(devbuf), area->dev_node))
+            return 0;
+
+        EMIT_PARAMS(*pos, "%s%s %llu", first_time ? "" : " ",
+                    devbuf, area->offset);
+
+        first_time = 0;
+    }
+
+    return 1;
+}
+
+struct target {
+    uint64_t start;
+    uint64_t length;
+    char *type;
+    char *params;
+        
+    struct target *next;
+};
+
+static struct target *create_target(uint64_t start, uint64_t len, const char *type,
+                 const char *params)
+{   
+    struct target *t;
+    
+//    if (!(t = kzalloc(sizeof(*t), GFP_KERNEL)))
+    if (!(t = dm_alloc(sizeof(*t), true)))
+        return NULL;
+
+    if (!(t->params = dm_pool_strdup(params)))
+        goto bad;
+
+    if (!(t->type = dm_pool_strdup(type)))
+        goto bad;
+
+    t->start = start;
+    t->length = len;
+
+    return t;
+
+bad:
+    kfree(t->params);
+    kfree(t->type);
+    kfree(t);
+
+    return NULL;
+}
+
+
+static int dm_task_add_target(struct dm_task *dmt, uint64_t start, uint64_t size,
+               const char *ttype, const char *params)
+{               
+    struct target *t = create_target(start, size, ttype, params);
+    if (!t)
+        return 0; 
+
+    if (!dmt->head)
+        dmt->head = dmt->tail = t;
+    else {
+        dmt->tail->next = t;
+        dmt->tail = t;
+    }
+             
+    return 1;
+}
+
+static const struct {
+    unsigned type;
+    const char target[16];
+} _dm_segtypes[] = {
+    { SEG_CACHE, "cache" },
+    { SEG_CRYPT, "crypt" },
+    { SEG_ERROR, "error" },
+    { SEG_LINEAR, "linear" },
+    { SEG_MIRRORED, "mirror" },
+    { SEG_REPLICATOR, "replicator" },
+    { SEG_REPLICATOR_DEV, "replicator-dev" },
+    { SEG_SNAPSHOT, "snapshot" },
+    { SEG_SNAPSHOT_ORIGIN, "snapshot-origin" },
+    { SEG_SNAPSHOT_MERGE, "snapshot-merge" },
+    { SEG_STRIPED, "striped" },
+    { SEG_ZERO, "zero"},
+    { SEG_THIN_POOL, "thin-pool"},
+    { SEG_THIN, "thin"},
+    { SEG_RAID1, "raid1"},
+    { SEG_RAID10, "raid10"},
+    { SEG_RAID4, "raid4"},
+    { SEG_RAID5_LA, "raid5_la"},
+    { SEG_RAID5_RA, "raid5_ra"},
+    { SEG_RAID5_LS, "raid5_ls"},
+    { SEG_RAID5_RS, "raid5_rs"},
+    { SEG_RAID6_ZR, "raid6_zr"},
+    { SEG_RAID6_NR, "raid6_nr"},
+    { SEG_RAID6_NC, "raid6_nc"},
+
+    /*
+     * WARNING: Since 'raid' target overloads this 1:1 mapping table
+     * for search do not add new enum elements past them!
+     */
+    { SEG_RAID5_LS, "raid5"}, /* same as "raid5_ls" (default for MD also) */
+    { SEG_RAID6_ZR, "raid6"}, /* same as "raid6_zr" */
+};
+
+
+
+static int _emit_segment_line(struct dm_task *dmt, uint32_t major,
+                  uint32_t minor, struct load_segment *seg,
+                  uint64_t *seg_start, char *params,
+                  size_t paramsize)
+{
+    int pos = 0;
+    int r;
+
+    switch(seg->type) {
+    case SEG_STRIPED:
+        EMIT_PARAMS(pos, "%u %u ", seg->area_count, seg->stripe_size);
+    case SEG_LINEAR:
+        if ((r = _emit_areas_line(seg, params, paramsize, &pos)) <= 0)
+            return r;
+
+        if (!params[0]) {
+			printk(">>>%s:%d\n", __func__, __LINE__);
+            return 0;
+        }   
+        break;
+    } 
+
+    if (!dm_task_add_target(dmt, *seg_start, seg->size,
+                _dm_segtypes[seg->type].target, params))
+        return 0;
+
+    *seg_start += seg->size;
+
+    return 1;
+}
+
+#define MAX_TARGET_PARAMSIZE 50000
+
+static int _emit_segment(struct dm_task *dmt, uint32_t major, uint32_t minor,
+             struct load_segment *seg, uint64_t *seg_start)
+{
+    char *params;
+    size_t paramsize = 4096;
+    int ret;
+
+    do {
+        if (!(params = kmalloc(paramsize, GFP_KERNEL))) {
+			printk(">>>%s:%d\n", __func__, __LINE__);
+            return 0;
+        }
+
+        params[0] = '\0';
+        ret = _emit_segment_line(dmt, major, minor, seg, seg_start,
+                     params, paramsize);
+        kfree(params);
+
+        if (ret >= 0)
+            return ret;
+
+        paramsize *= 2;
+    } while (paramsize < MAX_TARGET_PARAMSIZE);
+
+	printk(">>>%s:%d\n", __func__, __LINE__);
+    return 0;
+}
+
+static char *_align(char *ptr, unsigned int a)
+{   
+    register unsigned long agn = --a;
+
+    return (char *) (((unsigned long) ptr + agn) & ~agn);
+}
+
+#define ALIGNMENT 8
+
+static char *_add_target(struct target *t, char *out, char *end)
+{
+    char *out_sp = out;
+    struct dm_target_spec sp;
+    size_t sp_size = sizeof(struct dm_target_spec);
+    unsigned int backslash_count = 0;
+    int len;
+    char *pt;
+
+    sp.status = 0;
+    sp.sector_start = t->start;
+    sp.length = t->length;
+    strncpy(sp.target_type, t->type, sizeof(sp.target_type) - 1);
+    sp.target_type[sizeof(sp.target_type) - 1] = '\0';
+
+    out += sp_size;
+    pt = t->params;
+
+    while (*pt)
+        if (*pt++ == '\\')
+            backslash_count++;
+
+    len = strlen(t->params) + backslash_count;
+
+    if ((out >= end) || (out + len + 1) >= end) {
+		printk(">>>%s:%d\n", __func__, __LINE__);
+        return NULL;
+    }
+
+    if (backslash_count) {
+        /* replace "\" with "\\" */
+        pt = t->params;
+        do {
+            if (*pt == '\\')
+                *out++ = '\\';
+            *out++ = *pt++;
+        } while (*pt);
+        *out++ = '\0';
+    } else {
+        strcpy(out, t->params);
+        out += len + 1;
+    }
+
+    /* align next block */
+    out = _align(out, ALIGNMENT);
+
+    sp.next = out - out_sp;
+    memcpy(out_sp, &sp, sp_size);
+
+    return out;
+}
+
+
+int table_load(struct file *filp, struct dm_ioctl *param, size_t param_size);
+
+static int _load_node(struct dm_tree_node *dnode)
+{
+    int r = 0;
+    struct load_segment *seg;
+    uint64_t seg_start = 0, existing_table_size;
+	struct dm_ioctl *dmi;
+	struct dm_task dmt;
+	struct target *t;
+	int count = 0;
+	char *b, *e;
+
+	printk(">>>%s:%d name=%s uuid=%s dev=%lx major=%lx minor=%lx\n", __func__, __LINE__,
+		dnode->name, dnode->uuid, dnode->dev, dnode->info.major, dnode->info.minor);
+
+	dmt.head = NULL;
+	dmt.tail = NULL;
+
+	list_for_each_entry(seg, &dnode->props.segs, list)
+        if (!_emit_segment(&dmt, dnode->info.major, dnode->info.minor,
+                   seg, &seg_start))
+            goto out;
+
+	size_t len = sizeof(struct dm_ioctl);
+
+    for (t = dmt.head; t; t = t->next) {
+        len += sizeof(struct dm_target_spec);
+        len += strlen(t->params) + 1 + ALIGNMENT;
+        count++;
+    }
+
+    if (len < 16 * 1024)
+        len = 16 * 1024;
+
+	//dmi = kvmalloc(param_kernel->data_size, GFP_KERNEL | __GFP_HIGH);
+    if (!(dmi = kvmalloc(len, GFP_KERNEL | __GFP_HIGH)))
+        goto out;
+
+	memset(dmi, 0, len);
+
+    dmi->version[0] = 4;
+    dmi->version[1] = 0;
+    dmi->version[2] = 0;
+
+    dmi->data_size = len;
+    dmi->data_start = sizeof(struct dm_ioctl);
+
+
+    dmi->flags |= DM_PERSISTENT_DEV_FLAG;
+    dmi->dev = LVM_MKDEV((dev_t)_dm_device_major, (dev_t)dnode->info.minor);
+
+    dmi->target_count = count;
+
+    b = (char *)(dmi + 1);
+    e = (char *)dmi + len;
+
+    for (t = dmt.head; t; t = t->next)
+        if (!(b = _add_target(t, b, e)))
+            goto out;
+
+	dmi->flags = DM_EXISTS_FLAG | DM_SKIP_BDGET_FLAG;
+	if (dnode->props.read_only)
+		dmi->flags |= DM_READONLY_FLAG;
+
+
+	if ((r = table_load(NULL, dmi, len))) {
+		printk(">>>%s:%d r=%d\n", __func__, __LINE__, r);
+		r = 0;
+		goto out;
+	}
+
+    r = dm_task_get_info(dmi, &dnode->info);
+
+	dnode->props.size_changed = 1;
+    dnode->props.segment_count = 0;
+
+out:
+	kvfree(dmi);
+
+    return r;
+}
+
+
+
+
+
+static int dm_tree_preload_children(struct dm_tree_node *dnode,
+                 const char *uuid_prefix,
+                 size_t uuid_prefix_len)
+{
+    int r = 1, node_created = 0;
+    void *handle = NULL;
+	struct dm_tree_link *link;
+    struct dm_tree_node *child;
+    struct dm_info newinfo;
+    int update_devs_flag = 0;
+
+    /* Preload children first */
+	list_for_each_entry(link, &dnode->uses, list) {
+		child = link->node;
+
+        /* Skip existing non-device-mapper devices */
+        if (!child->info.exists && child->info.major)
+            continue;
+
+        if (child->info.exists &&
+            !_uuid_prefix_matches(child->uuid, uuid_prefix, uuid_prefix_len))
+            continue;
+
+        if (dm_tree_node_num_children(child, 0))
+            if (!dm_tree_preload_children(child, uuid_prefix, uuid_prefix_len))
+                return 0;
+
+        /* FIXME Cope if name exists with no uuid? */
+        if (!(node_created = _create_node(child)))
+            return 0;
+
+        if (!child->info.inactive_table &&
+            child->props.segment_count &&
+            !_load_node(child)) {
+			printk(">>>error %s:%d \n ", __func__, __LINE__);
+            return 0;
+        }
+
+       /* Propagate device size change change */
+        if (child->props.size_changed > 0 && !dnode->props.size_changed)
+            dnode->props.size_changed = 1;
+        else if (child->props.size_changed < 0)
+            dnode->props.size_changed = -1;
+
+        /* Resume device immediately if it has parents and its size changed */
+        if (!dm_tree_node_num_children(child, 1) || !child->props.size_changed)
+            continue;
+
+        if (!child->info.inactive_table && !child->info.suspended)
+            continue;
+
+		printk(">>>error %s:%d\n", __func__, __LINE__);
+    }
+
+    return r;
+}
+
+static const char *dm_tree_node_get_uuid(const struct dm_tree_node *node)
+{
+    return node->info.exists ? node->uuid : "";
+}
+
+static int _uuid_prefix_matches(const char *uuid, const char *uuid_prefix, size_t uuid_prefix_len)
+{
+    const char *default_uuid_prefix = UUID_PREFIX;
+    size_t default_uuid_prefix_len = strlen(default_uuid_prefix);
+
+    if (!uuid_prefix)
+        return 1;
+
+    if (!strncmp(uuid, uuid_prefix, uuid_prefix_len))
+        return 1;
+
+    /* Handle transition: active device uuids might be missing the prefix */
+    if (uuid_prefix_len <= 4)
+        return 0;
+
+    if (!strncmp(uuid, default_uuid_prefix, default_uuid_prefix_len))
+        return 0;
+
+    if (strncmp(uuid_prefix, default_uuid_prefix, default_uuid_prefix_len))
+        return 0;
+
+    if (!strncmp(uuid, uuid_prefix + default_uuid_prefix_len, uuid_prefix_len - default_uuid_prefix_len))
+        return 1;
+
+    return 0;
+}
+
+static const char *dm_tree_node_get_name(const struct dm_tree_node *node)
+{
+    return node->info.exists ? node->name : "";
+}
+
+
+int do_resume(struct dm_ioctl *param);
+
+static int _resume_node(const char *name, uint32_t major, uint32_t minor,
+            uint32_t read_ahead, uint32_t read_ahead_flags,
+            struct dm_info *newinfo, uint32_t *cookie,
+            uint16_t udev_flags, int already_suspended)
+{
+    int r = 0;
+	struct dm_ioctl dmi;
+	struct dm_info *info;
+
+//	printk(">>>%s:%d name=%s uuid=%s dev=%lx major=%lx ro=%d\n", __func__, __LINE__,
+//		dnode->name, dnode->uuid, dnode->dev, dnode->props.major, dnode->props.read_only);
+
+	memset(&dmi, 0, sizeof(dmi));
+
+    dmi.version[0] = 4;
+    dmi.version[1] = 0;
+    dmi.version[2] = 0;
+
+    dmi.flags |= DM_PERSISTENT_DEV_FLAG;
+    dmi.dev = LVM_MKDEV((dev_t)_dm_device_major, (dev_t)minor);
+
+	dmi.flags = DM_EXISTS_FLAG | DM_SKIP_BDGET_FLAG;
+
+	r = do_resume(&dmi);
+	if (r) {
+		printk(">>>%s:%d fail to resume lv r=%d\n", __func__, __LINE__, r);
+		r = 0;
+		goto out;
+	}
+
+    r = dm_task_get_info(&dmi, newinfo);
+
+out:
+
+    return r;
+}
+
+static int dm_tree_activate_children(struct dm_tree_node *dnode,
+                 const char *uuid_prefix,
+                 size_t uuid_prefix_len)
+{
+    int r = 1;
+    int resolvable_name_conflict;
+    void *handle = NULL;
+    struct dm_tree_node *child = dnode;
+    struct dm_info newinfo;
+    const char *name;
+    const char *uuid;
+	struct dm_tree_link *link;
+
+    /* Activate children first */
+	list_for_each_entry(link, &dnode->uses, list) {
+		child = link->node;
+        if (!(uuid = dm_tree_node_get_uuid(child)))
+            continue;
+
+        if (!_uuid_prefix_matches(uuid, uuid_prefix, uuid_prefix_len))
+            continue;
+
+        if (dm_tree_node_num_children(child, 0))
+            if (!dm_tree_activate_children(child, uuid_prefix, uuid_prefix_len))
+                return 0;
+    }
+
+    handle = NULL;
+	list_for_each_entry(link, &dnode->uses, list) {
+			child = link->node;
+
+            if (!(uuid = dm_tree_node_get_uuid(child)))
+                continue;
+
+            if (!_uuid_prefix_matches(uuid, uuid_prefix, uuid_prefix_len))
+                continue;
+
+            if (!(name = dm_tree_node_get_name(child)))
+                continue;
+
+            if (!child->info.inactive_table && !child->info.suspended)
+                continue;
+
+		//	printk(">>>%s:%d name=%s uuid=%s dev=%lx major=%lx minor=%lx ro=%d\n", __func__, __LINE__,
+		//		child->name, child->uuid, child->dev, child->info.major, child->info.minor);
+
+            if (!_resume_node(child->name, child->info.major, child->info.minor,
+                      child->props.read_ahead, child->props.read_ahead_flags,
+                      &newinfo, &child->dtree->cookie, child->udev_flags, child->info.suspended)) {
+				printk(">>>error %s:%d\n", __func__, __LINE__);
+
+                r = 0;
+                continue;
+            }
+
+            /* Update cached info */
+            child->info = newinfo;
+
+			if (child->context) {
+				struct logical_volume *lv;
+    			struct lv_layer *lvlayer = child->context;
+
+				lv = lvlayer->lv;
+				if (!strcmp(lv->name, lvname))
+					sprintf(real_root_dev_name, "/dev/dm-%d", child->info.minor);
+			}
+	}
+
+    return r;
+}
+
+
+static int _tree_action(struct dev_manager *dm, const struct logical_volume *lv,
+            struct lv_activate_opts *laopts, action_t action)
+{
+    const size_t DLID_SIZE = ID_LEN + sizeof(UUID_PREFIX) - 1;
+    struct dm_tree *dtree;
+    struct dm_tree_node *root;
+    char *dlid;
+    int r = 0;
+
+    /* Some targets may build bigger tree for activation */
+    dm->activation = action == ACTIVATE;
+    dm->suspend = 0;
+
+    if (!(dtree = _create_partial_dtree(dm, lv)))
+        return 0;
+
+    root = &dtree->root;
+
+    if (!(dlid = build_dm_uuid(lv, NULL)))
+        goto out;
+
+//	printk(">>>%s:%d lv uuid=%s\n", __func__, __LINE__, dlid);
+
+    switch(action) {
+#if 0
+    case CLEAN:
+        if (retry_deactivation())
+            dm_tree_retry_remove(root);
+
+        /* Deactivate any unused non-toplevel nodes */
+        if (!_clean_tree(dm, root, laopts->origin_only ? dlid : NULL))
+            goto out;
+        break;
+#endif
+	case ACTIVATE:
+        /* Add all required new devices to tree */
+        if (!_add_new_lv_to_dtree(dm, dtree, lv, laopts, NULL))
+            goto out;
+
+        /* Preload any devices required before any suspensions */
+        if (!dm_tree_preload_children(root, dlid, DLID_SIZE))
+            goto out;
+
+        if (root->props.size_changed < 0)
+            dm->flush_required = 1;
+
+        /* Currently keep the code require flush for any
+         * non 'thin pool/volume, mirror' or with any size change */
+        if (!lv_is_thin_volume(lv))
+            dm->flush_required = 1;
+
+#if 1
+        if (action == ACTIVATE) {
+            if (!dm_tree_activate_children(root, dlid, DLID_SIZE))
+                goto out;
+
+      //      if (!_create_lv_symlinks(dm, root))
+	//			printk(">>>%s:%d\n", __func__, __LINE__);
+               // log_warn("Failed to create symlinks for %s.", lv->name);
+        }
+#endif
+
+        break;
+    default:
+		printk(">>>%s:%d\n", __func__, __LINE__);
+        //log_error(INTERNAL_ERROR "_tree_action: Action %u not supported.", action);
+        goto out;
+    }
+
+    r = 1;
+
+out:
+    /* Save fs cookie for udev settle, do not wait here */
+out_no_root:
+  //  dm_tree_free(dtree);
+
+    return r;
+}
+
+static char *dm_build_dm_uuid(const char *uuid_prefix, const char *lvid, const char *layer)
+{           
+    char *dmuuid;
+    size_t len;
+            
+    if (!layer)
+        layer = "";
+            
+    len = strlen(uuid_prefix) + strlen(lvid) + strlen(layer) + 2;
+            
+//    if (!(dmuuid = kmalloc(len, GFP_KERNEL))) {
+    if (!(dmuuid = dm_alloc(len, false))) {
+		printk(">>>%s:%d\n", __func__, __LINE__);
+        return NULL;
+    }
+
+    sprintf(dmuuid, "%s%s%s%s", uuid_prefix, lvid, (*layer) ? "-" : "", layer);
+
+    return dmuuid;
+}
+
+static struct lv_segment *get_only_segment_using_this_lv(const struct logical_volume *lv)
+{   
+    struct seg_list *sl;
+    
+    if (!lv)
+        return NULL;
+    
+	list_for_each_entry(sl, &lv->segs_using_this_lv, list) {
+        /* Needs to be he only item in list */
+        if (!(&lv->segs_using_this_lv == sl->list.next))
+            break;
+        
+        if (sl->count != 1)
+            return NULL;
+        
+        return sl->seg;
+    }
+          
+    return NULL;
+} 
+
+static int lv_is_cache_origin(const struct logical_volume *lv)
+{
+    struct lv_segment *seg;
+
+    /* Make sure there's exactly one segment in segs_using_this_lv! */ 
+    if (list_empty(&lv->segs_using_this_lv) ||
+        (list_size(&lv->segs_using_this_lv) > 1))
+        return 0;
+
+    seg = get_only_segment_using_this_lv(lv); 
+
+    return seg && lv_is_cache(seg->lv) && !lv_is_pending_delete(seg->lv) && (seg_lv(seg, 0) == lv);
+}
+
+static char *build_dm_uuid(const struct logical_volume *lv,
+            const char *layer)
+{           
+    const char *lvid = lv->lvid.s;
+    
+    if (!layer) {
+        layer = lv_is_cache_origin(lv) ? "real" :
+            (lv_is_cache(lv) && lv_is_pending_delete(lv)) ? "real" :
+            lv_is_cache_pool_data(lv) ? "cdata" :
+            lv_is_cache_pool_metadata(lv) ? "cmeta" :
+            lv_is_thin_pool(lv) ? "pool" :
+            lv_is_thin_pool_data(lv) ? "tdata" :
+            lv_is_thin_pool_metadata(lv) ? "tmeta" :
+            NULL;
+    } 
+    
+    return dm_build_dm_uuid(UUID_PREFIX, lvid, layer);
+} 
+
+static int lv_active_change(struct logical_volume *lv)
+{
+	int excl;
+    struct lv_activate_opts laopts;
+    struct dev_manager *dm;
+	uint32_t flags = LCK_HOLD | LCK_LOCAL;
+	int r = 0;
+
+	if (_lv_is_exclusive(lv))
+		flags |= LCK_LV_EXCLUSIVE;
+	else
+		flags |= LCK_LV_ACTIVATE;
+
+    flags |= LCK_NONBLOCK;
+
+	if (LCK_EXCL == (flags & LCK_EXCL))
+		excl = 1;
+	else
+		excl = 0;
+
+	memset(&laopts, 0, sizeof(struct lv_activate_opts));
+
+    laopts.exclusive = excl;
+    laopts.noscan = lv->status & LV_NOSCAN ? 1 : 0;
+    laopts.temporary = lv->status & LV_TEMPORARY ? 1 : 0;
+
+	if (!(dm = kzalloc(sizeof(struct dev_manager), GFP_KERNEL)))
+		goto out;
+
+	dm->vg_name = lv->vg->name;
+    dm->track_pvmove_deps = 1;
+    INIT_LIST_HEAD(&dm->pending_delete);
+    
+    if (!_tree_action(dm, lv, &laopts, ACTIVATE))
+        r = 0;;
+    
+#if 0
+    if (!_tree_action(dm, lv, &laopts, CLEAN))
+        return 0;
+#endif
+
+out:
+	kfree(dm);
+    return r;
+}
+
+
+static int lv_is_replicator_dev(const struct logical_volume *lv)
+{
+    return ((lv->status & REPLICATOR) &&
+        !list_empty(&lv->segments) &&
+        seg_is_replicator_dev(first_seg(lv)));
+}
+
+static int find_replicator_vgs(const struct logical_volume *lv)
+{
+    struct replicator_site *rsite;
+    int ret = 1;
+
+    if (!lv_is_replicator_dev(lv))
+        return 1;
+
+    ret = 0;
+#if 0
+    dm_list_iterate_items(rsite, &first_seg(lv)->replicator->rsites) {
+//      fprintf(stderr, ">>>%s:%d\n", __func__, __LINE__);
+        if (!rsite->vg_name || !lv->vg->cmd_vgs ||
+            cmd_vg_lookup(lv->vg->cmd_vgs, rsite->vg_name, NULL))
+            continue;
+
+        ret = 0;
+        /* Using cmd memory pool for cmd_vg list allocation */
+        if (!cmd_vg_add(lv->vg->cmd->mem, lv->vg->cmd_vgs,
+                rsite->vg_name, NULL, 0)) {
+            lv->vg->cmd_missing_vgs = 0; /* do not retry */
+            stack;
+            break;
+        }   
+
+//      log_debug_metadata("VG: %s added as missing.", rsite->vg_name);
+        lv->vg->cmd_missing_vgs++;
+    }   
+#endif
+
+    return ret;
+}
+
+
+static char *_unquote(char *component)
+{   
+    char *c = component;
+    char *o = c;
+    char *r;
+    
+    while (*c) {
+        if (*(c + 1)) {
+            if (*c == '-') { 
+                if (*(c + 1) == '-')
+                    c++;
+                else
+                    break;
+            }
+        }
+        *o = *c;
+        o++;
+        c++;
+    }
+    
+    r = (*c) ? c + 1 : c;
+    *o = '\0';
+    
+    return r;
+}
+
+static char *root_name = NULL;
+
+static int parse_vg_lv_name(char *orignal_root_name)
+{
+	char *ptr, *start;
+
+	root_name = kmalloc(strlen(orignal_root_name) + 1, GFP_KERNEL);
+	if (!root_name)
+		return 0;
+
+	strcpy(root_name, orignal_root_name);
+
+	if (strncmp(root_name, "/dev/", 5)) {
+		kfree(root_name);
+		return 0;
+	}
+
+	start = orignal_root_name + 5;
+
+    if (!(ptr = strchr(start, '/'))) {
+		kfree(root_name);
+		return 0;
+	}
+
+	*ptr = '\0';
+
+	if (!strcmp(start, "mapper")) {
+		vgname = ptr + 1;
+		_unquote(lvname = _unquote(vgname));
+	} else {
+		vgname = start;
+		lvname = ptr + 1;
+	}
+
+	real_root_dev_name = orignal_root_name;
+
+	return 1;
+}
+
+static int enlarge_dm_alloc_array(void)
+{
+	void *tmp;
+	size_t old_len = dm_alloc_array_size;
+	size_t new_len = dm_alloc_array_size + PAGE_SIZE;
+
+   	if (!(tmp = kvmalloc(new_len, GFP_KERNEL | __GFP_HIGH)))
+       	return -1;
+
+	memset(tmp, 0, new_len);
+	memcpy(tmp, dm_alloc_array, old_len);
+
+	kvfree(dm_alloc_array);
+	dm_alloc_array = tmp;
+	dm_alloc_array_size = new_len;
+
+	return 0;
+}
+
+static void *dm_alloc(size_t length, bool zero)
+{
+	void *ptr = NULL;
+
+	if (!dm_alloc_array)
+		if (0 > enlarge_dm_alloc_array())
+			goto out;
+
+	if (zero)
+		ptr = kzalloc(length, GFP_KERNEL);
+	else
+		ptr = kmalloc(length, GFP_KERNEL);
+
+	if (!ptr)
+		goto out;
+
+	dm_alloc_array[dm_alloc_array_cnt++] = ptr;
+
+	if (dm_alloc_array_cnt * sizeof(void*) == dm_alloc_array_size)
+		if (0 > enlarge_dm_alloc_array())
+			BUG();
+
+out:
+	return ptr;
+}
+
+static void dm_free(void *ptr)
+{
+	int i;
+	void *tmp;
+
+	for (i = 0; i < dm_alloc_array_cnt; i++) {
+		tmp = dm_alloc_array[i];
+		if (ptr == tmp) {
+			kfree(tmp);
+			dm_alloc_array[i] = NULL;
+		}
+	}
+}
+
+static void free_dm_memory(void)
+{
+	int i;
+	void *ptr;
+
+	for (i = 0; i < dm_alloc_array_cnt; i++) {
+		ptr = dm_alloc_array[i];
+		if (ptr)
+			kfree(ptr);
+	}
+
+	kvfree(dm_alloc_array);
+}
+
+static void parse_lvm_root_dev(void)
 {
 	struct dev_types *dts;
 	struct list_head dev_head;
-	struct hyper_rootdev_device *dev, *tmp;
+	struct hyper_rootdev_device *dev;
+	struct format_instance fid;
+	struct volume_group *vg = NULL, *correct_vg = NULL;
+	struct metadata_area *mda;
+	unsigned use_previous_vg;
+	struct cached_vg_fmtdata *vg_fmtdata = NULL;
+	struct segment_type *segtype;
+    struct lv_list *lvl = NULL;
 
 	parse_init();
 
@@ -2968,7 +7249,7 @@ void hyper_gen_parse_root_dev(char *orignal_root_name)
 	INIT_LIST_HEAD(&dev_head);
 	prepare_dev_list(&dev_head);
 
-	open_control(dts);
+	_dm_device_major = dts->device_mapper_major;
 
 	INIT_LIST_HEAD(&pv_head);
 	INIT_LIST_HEAD(&vginfo_head);
@@ -2980,8 +7261,8 @@ void hyper_gen_parse_root_dev(char *orignal_root_name)
     		int r = 0;
 			struct label *label;
 
-			if ((r = find_lvm2_label(dev, buf, &sector))) {
-				if ((r = lvm2_read(dts, dev, buf, &label)) && label) {
+			if ((r = lvm2_find_label(dev, buf, &sector))) {
+				if ((r = lvm2_label_read(dts, dev, buf, &label)) && label) {
 					label->dev = dev;
 					label->sector = sector;
 				}
@@ -2989,15 +7270,146 @@ void hyper_gen_parse_root_dev(char *orignal_root_name)
         }
 	}
 
+	fid.vgname = vgname;
 
-#if 0
-	list_for_each_entry_safe(dev, tmp, &head, list) {
-			list_del_init(&dev->list);
+	INIT_LIST_HEAD(&fid.metadata_areas_in_use);
+	INIT_LIST_HEAD(&fid.metadata_areas_ignored);
+	INIT_LIST_HEAD(&fid.metadata_areas_index);
+
+    _create_vg_text_instance(&fid);
+
+	INIT_LIST_HEAD(&segtypes_head);
+    segtype = dm_alloc(sizeof(*segtype), true);
+	if (!segtype) {
+		printk(">>>%s:%d\n", __func__, __LINE__);
+		goto out;
 	}
-#endif
+
+    segtype->ops = &_striped_ops;
+    segtype->name = SEG_TYPE_NAME_STRIPED;
+    segtype->flags =
+        SEG_CAN_SPLIT | SEG_AREAS_STRIPED | SEG_FORMAT1_SUPPORT;
+	INIT_LIST_HEAD(&segtype->list);
+
+	list_add(&segtype->list, &segtypes_head);
 
 
-	kfree(dts);
+	list_for_each_entry(mda, &fid.metadata_areas_in_use, list) {
+        use_previous_vg = 0;
+
+        if (!(vg = _vg_read_raw(&fid, mda, &vg_fmtdata, &use_previous_vg))
+                && !use_previous_vg) {
+            vg_fmtdata = NULL;
+            continue;
+        }
+
+        /* Use previous VG because checksum matches */
+        if (!vg) {
+            vg = correct_vg;
+            continue;
+        }
+
+        if (!correct_vg) {
+            correct_vg = vg;
+            continue;
+        }
+
+        /* FIXME Also ensure contents same - checksum compare? */
+        if (correct_vg->seqno != vg->seqno) {
+            if (vg->seqno > correct_vg->seqno)
+                correct_vg = vg;
+            else
+                mda->status |= MDA_INCONSISTENT;
+        }
+
+        if (vg != correct_vg)
+            vg_fmtdata = NULL;
+    }
+
+	if (!vg) {
+		printk(">>>%s:%d\n", __func__, __LINE__);
+		goto out;
+	}
+
+	list_for_each_entry(lvl, &vg->lvs, list) {
+		struct logical_volume *lv = lvl->lv;
+		struct logical_volume *origin;
+
+		if (lv->status & SNAPSHOT)
+            continue;
+
+		if (strcmp(lv->name, lvname))
+            continue;
+
+		if (lv_is_pvmove(lv))
+			continue;
+
+		if (lv_is_mirror_log(lv))
+			continue;
+
+		if (lv_is_mirror_image(lv))
+			continue;
+
+		if (lv_is_pending_delete(lv))
+			continue;
+
+		if (lv_is_external_origin(lv))
+			continue;
+
+		if (lv_is_origin(lv))
+			continue;
+
+		if (lv_is_merging_origin(lv))
+			continue;
+
+		if (lv_is_cow(lv))
+			continue;
+
+		if (lv_is_thin_pool(lv)) {
+			printk(">>>%s:%d thin pool LV is not support\n", __func__, __LINE__);
+			continue;
+		}
+
+		if (lv_is_cache_pool(lv)) {
+			printk(">>>%s:%d cache pool LV is not support\n", __func__, __LINE__);
+			continue;
+		}
+
+		if (lv_is_cache(lv)) {
+			printk(">>>%s:%d cache LV is not support\n", __func__, __LINE__);
+			continue;
+		}
+
+		if ((lv->vg->status & PRECOMMITTED)) {
+			printk(">>>%s:%d precommitted VG is not support\n", __func__, __LINE__);
+			continue;
+		}
+
+		if (!lv_is_visible(lv) && !lv_is_virtual_origin(lv))
+			continue;
+
+		if (!find_replicator_vgs(lv))
+			continue;
+
+		lv_active_change(lv);
+	}
+
+
+out:
+	list_for_each_entry(dev, &dev_head, list) {
+		if (dev->fd >= 0)
+			sys_close(dev->fd);
+	}
+
+	free_dm_memory();
+
+	kfree(root_name);
 
 	return;
+}
+
+void hyper_gen_parse_root_dev(char *orignal_root_name)
+{
+	if (parse_vg_lv_name(orignal_root_name))
+		parse_lvm_root_dev();
 }

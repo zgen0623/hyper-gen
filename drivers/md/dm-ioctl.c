@@ -775,6 +775,41 @@ static int dev_create(struct file *filp, struct dm_ioctl *param, size_t param_si
 	return 0;
 }
 
+int my_dev_create(struct dm_ioctl *param)
+{
+	int r, m = DM_ANY_MINOR;
+	struct mapped_device *md;
+
+	r = check_name(param->name);
+	if (r)
+		return r;
+
+	if (param->flags & DM_PERSISTENT_DEV_FLAG)
+		m = MINOR(huge_decode_dev(param->dev));
+
+	r = dm_create(m, &md);
+	if (r)
+		return r;
+
+	r = dm_hash_insert(param->name, *param->uuid ? param->uuid : NULL, md);
+	if (r) {
+		dm_put(md);
+		dm_destroy(md);
+		return r;
+	}
+
+	param->flags &= ~DM_INACTIVE_PRESENT_FLAG;
+
+	__dev_status(md, param);
+
+	dm_put(md);
+
+	return 0;
+}
+
+
+
+
 /*
  * Always use UUID for lookups if it's present, otherwise use name or dev.
  */
@@ -821,18 +856,39 @@ static struct hash_cell *__find_device_hash_cell(struct dm_ioctl *param)
 	return hc;
 }
 
+int my_check_lv_exist_by_uuid(char *uuid)
+{
+	int ret = 0;
+	struct hash_cell *hc;
+
+	down_read(&_hash_lock);
+
+	hc = __get_uuid_cell(uuid);
+	if (!hc)
+		ret = -1;
+
+	up_read(&_hash_lock);
+
+	return ret;
+}
+
+
 int my_dm_get_uuid_by_dev(dev_t dev, char *uuid, int length)
 {
+	int ret = 0;
 	struct hash_cell *hc = NULL;
 
+	down_read(&_hash_lock);
 	hc = __get_dev_cell(dev);
 	if (!hc)
-		return -1;
+		ret = -1;
 
-	if (hc->uuid)
+	up_read(&_hash_lock);
+
+	if (hc && hc->uuid)
 		strlcpy(uuid, hc->uuid, length);
 
-	return 0;
+	return ret;
 }
 
 static struct mapped_device *find_device(struct dm_ioctl *param)
@@ -1020,7 +1076,7 @@ out:
 	return r;
 }
 
-static int do_resume(struct dm_ioctl *param)
+int do_resume(struct dm_ioctl *param)
 {
 	int r = 0;
 	unsigned suspend_flags = DM_SUSPEND_LOCKFS_FLAG;
@@ -1095,6 +1151,7 @@ static int do_resume(struct dm_ioctl *param)
  */
 static int dev_suspend(struct file *filp, struct dm_ioctl *param, size_t param_size)
 {
+
 	if (param->flags & DM_SUSPEND_FLAG)
 		return do_suspend(param);
 
@@ -1315,7 +1372,7 @@ static bool is_valid_type(enum dm_queue_mode cur, enum dm_queue_mode new)
 	return false;
 }
 
-static int table_load(struct file *filp, struct dm_ioctl *param, size_t param_size)
+int table_load(struct file *filp, struct dm_ioctl *param, size_t param_size)
 {
 	int r;
 	struct hash_cell *hc;

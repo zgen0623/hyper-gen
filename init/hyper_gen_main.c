@@ -838,56 +838,6 @@ static int hyper_gen_daemon(void *data)
 	return 0;
 }
 
-
-
-
-
-#if 0
-void dump_current_cfs_rq_tg(void);
-static int vcpu_exit = 0;
-static int hyper_gen_vcpu_func(void *unused)
-{
-	printk(">>>>%s:%d hyper_gen_vcpu\n", __func__, __LINE__);
-	dump_current_cfs_rq_tg();
-
-	while(1) {
-		msleep(3*1000);
-
-		if (vcpu_exit)
-			break;
-	}
-
-	do_exit(0);
-}
-
-static int hyper_gen_vm_func(void *unused)
-{
-	int cnt = 0;
-	int pid;
-	struct task_struct *p;
-
-	pid = kernel_thread(hyper_gen_vcpu_func, NULL, CLONE_FS|CLONE_FILES);
-
-	rcu_read_lock();
-	p = find_task_by_pid_ns(pid, &init_pid_ns);
-	rcu_read_unlock();
-
-	printk(">>>>%s:%d hyper_gen_vm\n", __func__, __LINE__);
-	dump_current_cfs_rq_tg();
-
-	while(1) {
-		msleep(3*1000);
-
-		if (cnt++ == 10)
-			break;
-	}
-
-	vcpu_exit = 1;
-
-	do_exit(0);
-}
-#endif
-
 static void alloc_vhost_target_file(char *file_dir)
 {
 	int fd;
@@ -1125,9 +1075,6 @@ void hyper_gen_init(void)
 	//setup bridge
 	init_hyper_gen_bridge();
 
-	//disable nx_huge_pages
-//	hyper_gen_set_nx_huge_pages("off");
-
 	//launch hyper-gen daemon thread
 	pid = kernel_thread(hyper_gen_daemon, NULL, CLONE_FS | CLONE_FILES);
 	rcu_read_lock();
@@ -1135,17 +1082,4 @@ void hyper_gen_init(void)
 	rcu_read_unlock();
 
 	check_hot_buddy();
-
-#if 0
-	struct task_struct *p;
-//	my_task_test = 1;
-	pid = kernel_thread(hyper_gen_vm_func, NULL, CLONE_FS | CLONE_FILES);
-//	my_task_test = 0;
-	rcu_read_lock();
-	p = find_task_by_pid_ns(pid, &init_pid_ns);
-	rcu_read_unlock();
-
-	printk(">>>>%s:%d p=%lx init_tg=%lx tg=%lx c_tg=%lx my_q=%lx curr_my_q=%lx\n", __func__, __LINE__, p,
-		&root_task_group, p->sched_task_group, current->sched_task_group, p->se.my_q, current->se.my_q );
-#endif
 }

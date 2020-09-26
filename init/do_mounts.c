@@ -207,6 +207,8 @@ done:
  *	bangs.
  */
 
+void hyper_gen_parse_root_dev(char *orignal_root_name);
+
 dev_t name_to_dev_t(const char *name)
 {
 	char s[32];
@@ -542,7 +544,6 @@ void __init mount_root(void)
 #endif
 }
 
-void hyper_gen_parse_root_dev(char *orignal_root_name);
 
 /*
  * Prepare the namespace - decide what/where to mount, load ramdisks, etc.
@@ -551,8 +552,6 @@ void __init prepare_namespace(void)
 {
 	int is_floppy;
 	int err;
-
-	hyper_gen_parse_root_dev(saved_root_name);
 
 	if (root_delay) {
 		printk(KERN_INFO "Waiting %d sec before mounting root device...\n",
@@ -570,6 +569,8 @@ void __init prepare_namespace(void)
 	wait_for_device_probe();
 
 	md_run_setup();
+
+	hyper_gen_parse_root_dev(saved_root_name);
 
 	if (saved_root_name[0]) {
 		root_device_name = saved_root_name;
@@ -597,12 +598,10 @@ void __init prepare_namespace(void)
 		async_synchronize_full();
 	}
 
-#if 0
 	is_floppy = MAJOR(ROOT_DEV) == FLOPPY_MAJOR;
 
 	if (is_floppy && rd_doload && rd_load_disk(0))
 		ROOT_DEV = Root_RAM0;
-#endif
 
 	mount_root();
 out:
