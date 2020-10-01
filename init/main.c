@@ -1003,8 +1003,6 @@ void hyper_gen_init(void);
 
 static int __ref kernel_init(void *unused)
 {
-	int ret;
-
 	kernel_init_freeable();
 	/* need to finish all async __init code before freeing the memory */
 	async_synchronize_full();
@@ -1025,47 +1023,12 @@ static int __ref kernel_init(void *unused)
 
 	hyper_gen_init();
 
-#if 1
 	while (1) {
 		set_current_state(TASK_INTERRUPTIBLE);
 		schedule();
-//		__set_current_state(TASK_RUNNING);
-		//asm volatile("hlt");
-	}
-#endif
-
-	if (ramdisk_execute_command) {
-		ret = run_init_process(ramdisk_execute_command);
-		if (!ret)
-			return 0;
-		pr_err("Failed to execute %s (error %d)\n",
-		       ramdisk_execute_command, ret);
 	}
 
-
-
-
-	/*
-	 * We try each of these until one succeeds.
-	 *
-	 * The Bourne shell can be used instead of init if we are
-	 * trying to recover a really broken machine.
-	 */
-	if (execute_command) {
-		ret = run_init_process(execute_command);
-		if (!ret)
-			return 0;
-		panic("Requested init %s failed (error %d).",
-		      execute_command, ret);
-	}
-	if (!try_to_run_init_process("/sbin/init") ||
-	    !try_to_run_init_process("/etc/init") ||
-	    !try_to_run_init_process("/bin/init") ||
-	    !try_to_run_init_process("/bin/sh"))
-		return 0;
-
-	panic("No working init found.  Try passing init= option to kernel. "
-	      "See Linux Documentation/admin-guide/init.rst for guidance.");
+	return 0;
 }
 
 static noinline void __init kernel_init_freeable(void)
@@ -1109,20 +1072,9 @@ static noinline void __init kernel_init_freeable(void)
 
 	(void) sys_dup(0);
 	(void) sys_dup(0);
-	/*
-	 * check if there is an early userspace init.  If yes, let it do all
-	 * the work
-	 */
-	if (!ramdisk_execute_command)
-		ramdisk_execute_command = "/init";
 
-#if 0
-	if (sys_access((const char __user *) ramdisk_execute_command, 0) != 0)
-		prepare_namespace();
-#else
-		ramdisk_execute_command = NULL;
-		prepare_namespace();
-#endif
+	ramdisk_execute_command = NULL;
+	prepare_namespace();
 
 	/*
 	 * Ok, we have completed the initial bootup, and
