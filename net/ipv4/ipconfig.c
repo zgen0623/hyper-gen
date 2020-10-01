@@ -105,9 +105,9 @@
  * variables using firmware environment vars.  If this is set, it will
  * ignore such firmware variables.
  */
-int ic_set_manually __initdata = 0;		/* IPconfig parameters set manually */
+int ic_set_manually __initdata = 1;		/* IPconfig parameters set manually */
 
-static int ic_enable __initdata;		/* IP config enabled? */
+static int ic_enable __initdata = 1;		/* IP config enabled? */
 
 /* Protocol choice */
 int ic_proto_enabled __initdata = 0
@@ -117,8 +117,10 @@ int ic_proto_enabled __initdata = 0
 #ifdef CONFIG_IP_PNP_DHCP
 			| IC_USE_DHCP
 #endif
+#if 0
 #ifdef IPCONFIG_RARP
 			| IC_RARP
+#endif
 #endif
 			;
 
