@@ -169,6 +169,16 @@ struct hyper_gen_tty_context {
 	struct hyper_gen_work vser_tx_work;
 };
 
+struct linux_dirent {
+    unsigned long   d_ino;
+    unsigned long   d_off;
+    unsigned short  d_reclen;
+    char        d_name[1];
+};
+
+typedef void (*for_each_dirent_fn_t)(char *, struct stat*);
+
+
 struct kvm *find_kvm_by_id(uint64_t kvm_id);
 void attach_to_vser(struct kvm *kvm, wait_queue_entry_t *tx_wait, wait_queue_entry_t *rx_wait);
 void deattach_to_vser(struct kvm *kvm, wait_queue_entry_t *tx_wait, wait_queue_entry_t *rx_wait);
@@ -176,7 +186,7 @@ int vser_can_receive(struct kvm *kvm);
 void vser_receive(struct kvm *kvm, const uint8_t *buf, int size);
 static void handle_vser_rx(struct hyper_gen_work *work);
 void foreach_kvm_call_fn(for_each_kvm_fn_t fn, void *arg);
-int hyper_gen_create_vm_from_mgnt(unsigned long image_id);
+int hyper_gen_create_vm_from_mgnt(unsigned long kernel_id, unsigned long image_id);
 int hyper_gen_destroy_vm(unsigned long vm_id);
 int hyper_gen_flush_eth_dev(struct net_device *dev);
 ssize_t __nr_hugepages_store_common(bool obey_mempolicy,
@@ -194,9 +204,18 @@ static const char *prompt = "hyper-gen:#";
 
 static DEFINE_MUTEX(image_lock);
 static LIST_HEAD(image_list);
+
+static DEFINE_MUTEX(kernel_lock);
+static LIST_HEAD(kernel_list);
+
 static uint64_t glb_image_cnt = 1;
+static uint64_t glb_kernel_cnt = 1;
 
 int my_task_test = 0;
+
+static char *guest_image_dir = NULL;
+static char *guest_kernel_dir = NULL;
+
 
 void hyper_gen_commit_work(struct hyper_gen_work *work)
 {
@@ -323,15 +342,13 @@ static void stop_vm_console(struct hyper_gen_tty_context *ctx)
 #endif
 }
 
-
-
 struct hyper_gen_image *find_image_by_id(unsigned long image_id)
 {
 	struct hyper_gen_image *img;
 
 	mutex_lock(&image_lock);
 
-	list_for_each_entry(img, &image_list, image_list) {
+	list_for_each_entry(img, &image_list, list) {
 		if (img->id == image_id) {
 			mutex_unlock(&image_lock);
 			return img;
@@ -342,11 +359,33 @@ struct hyper_gen_image *find_image_by_id(unsigned long image_id)
 	return NULL;
 }
 
-static int hyper_gen_create_vm_by_template(unsigned long image_id)
+struct hyper_gen_kernel *find_kernel_by_id(unsigned long kernel_id)
+{
+	struct hyper_gen_kernel *k;
+
+	mutex_lock(&kernel_lock);
+
+	list_for_each_entry(k, &kernel_list, list) {
+		if (k->id == kernel_id) {
+			mutex_unlock(&kernel_lock);
+			return k;
+		}
+	}
+
+	mutex_unlock(&kernel_lock);
+	return NULL;
+}
+
+static int hyper_gen_create_vm_by_template(
+		unsigned long kernel_id, unsigned long image_id)
 {
 	struct hyper_gen_image *img;
+	struct hyper_gen_kernel *k;
 
-	//TODO: implement image_id
+	k = find_kernel_by_id(kernel_id);
+	if (!k)
+		return -1;
+
 	img = find_image_by_id(image_id);
 	if (!img)
 		return -1;
@@ -356,7 +395,7 @@ static int hyper_gen_create_vm_by_template(unsigned long image_id)
 
 	img->used = true;
 
-	hyper_gen_create_vm_from_mgnt(image_id);
+	hyper_gen_create_vm_from_mgnt(kernel_id, image_id);
 
 	return 0;
 }
@@ -372,17 +411,36 @@ static void list_fn(struct kvm *kvm, void *arg)
 
 static void list_hyper_gen_image(struct hyper_gen_tty_context *ctx)
 {
-	char tmp[32];
+	char tmp[128];
 	struct hyper_gen_image *img;
+	int n;
 
 	mutex_lock(&image_lock);
 
-	list_for_each_entry(img, &image_list, image_list) {
-		sprintf(tmp, "Image: id->%llu used->%d\n", img->id, img->used);
-		sys_write(ctx->fd, (const char __user *)tmp, strlen(tmp));
+	list_for_each_entry(img, &image_list, list) {
+		n = snprintf(tmp, sizeof(tmp),
+			"Image: id->%llu used->%d path=%s\n", img->id, img->used, img->file_path);
+		sys_write(ctx->fd, (const char __user *)tmp, n);
 	}
 
 	mutex_unlock(&image_lock);
+}
+
+static void list_hyper_gen_kernel(struct hyper_gen_tty_context *ctx)
+{
+	char tmp[128];
+	struct hyper_gen_kernel *k;
+	int n;
+
+	mutex_lock(&kernel_lock);
+
+	list_for_each_entry(k, &kernel_list, list) {
+		n = snprintf(tmp, sizeof(tmp),
+			"Kernel: id->%llu path=%s\n", k->id, k->file_path);
+		sys_write(ctx->fd, (const char __user *)tmp, n);
+	}
+
+	mutex_unlock(&kernel_lock);
 }
 
 static bool parse_cmd(struct hyper_gen_tty_context *ctx)
@@ -391,6 +449,7 @@ static bool parse_cmd(struct hyper_gen_tty_context *ctx)
 	char *val;
 	unsigned long vm_id;
 	unsigned long image_id;
+	unsigned long kernel_id;
 	char tmp[32];
 	char *param;
 	char *args = ctx->rx_buf;
@@ -415,11 +474,19 @@ static bool parse_cmd(struct hyper_gen_tty_context *ctx)
 		if (!val)
 			goto fail_val;
 
+		ret = kstrtoul(val, 0, &kernel_id);
+		if (ret)
+			goto fail_val;
+
+		val = strsep(&args, " ");
+		if (!val)
+			goto fail_val;
+
 		ret = kstrtoul(val, 0, &image_id);
 		if (ret)
 			goto fail_val;
 
-		ret = hyper_gen_create_vm_by_template(image_id);
+		ret = hyper_gen_create_vm_by_template(kernel_id, image_id);
 		if (ret)
 			goto fail_val;
 		return true;
@@ -441,6 +508,9 @@ static bool parse_cmd(struct hyper_gen_tty_context *ctx)
 		return true;
 	} else if (!strcmp(param, "image_list")) {
 		list_hyper_gen_image(ctx);
+		return true;
+	} else if (!strcmp(param, "kernel_list")) {
+		list_hyper_gen_kernel(ctx);
 		return true;
 	} else if (!strcmp(param, "host_reboot")) {
 		kernel_restart(NULL);
@@ -838,124 +908,121 @@ static int hyper_gen_daemon(void *data)
 	return 0;
 }
 
-static void alloc_vhost_target_file(char *file_dir)
+static int alloc_vhost_target_file(char *config_dir, char *file_path)
 {
 	int fd;
 	int ret;
 	char buf[128];
 	char buf_1[128];
-	struct hyper_gen_image *image =
-		kzalloc(sizeof(struct hyper_gen_image), GFP_KERNEL);
-
-	image->id = glb_image_cnt++;
-	image->used = false;
+	struct hyper_gen_image *image;
+	uint64_t id = glb_image_cnt++;
 
 	//1. mkdir -p /sys/kernel/config/target/core/fileio_2/myFile2
-	sprintf(buf, "/sys/kernel/config/target/core/fileio_%llu", image->id);
+	sprintf(buf, "/sys/kernel/config/target/core/fileio_%llu", id);
 	ret = sys_mkdir(buf, 0777);
 	if (ret)
 		printk(">>>%s:%d\n", __func__, __LINE__);
 
-	sprintf(buf, "/sys/kernel/config/target/core/fileio_%llu/myFile", image->id);
+	sprintf(buf, "/sys/kernel/config/target/core/fileio_%llu/myFile", id);
 	ret = sys_mkdir(buf, 0777);
 	if (ret)
 		printk(">>>%s:%d\n", __func__, __LINE__);
 
 
 	//2. echo 'fd_dev_name=/home/gen/openSource/guen/rootfs/debootstrap.ext2.raw,fd_dev_size=5116637696' > /sys/kernel/config/target/core/fileio_2/myFile2/control
-	sprintf(buf, "/sys/kernel/config/target/core/fileio_%llu/myFile/control", image->id);
+	sprintf(buf, "/sys/kernel/config/target/core/fileio_%llu/myFile/control", id);
 	if ((fd = sys_open((const char __user *)buf,
 			O_WRONLY, 0)) < 0) {
 		printk(">>>%s:%d\n", __func__, __LINE__);
-		return;
+		return -1;
 	}
 
-	sprintf(buf, "%s", file_dir);
-	ret = sys_write(fd, buf, strlen(buf));
-	if (ret <= 0)
+	ret = sys_write(fd, config_dir, strlen(config_dir));
+	if (ret <= 0) {
 		printk(">>>%s:%d\n", __func__, __LINE__);
+		return -1;
+	}
+	sys_close(fd);
 
 
 	//3. echo 1 > /sys/kernel/config/target/core/fileio_2/myFile2/enable
-	sprintf(buf, "/sys/kernel/config/target/core/fileio_%llu/myFile/enable", image->id);
+	sprintf(buf, "/sys/kernel/config/target/core/fileio_%llu/myFile/enable", id);
 	if ((fd = sys_open((const char __user *)buf,
 			O_WRONLY, 0)) < 0) {
 		printk(">>>%s:%d\n", __func__, __LINE__);
-		return;
+		return -1;
 	}
 
 	sprintf(buf, "%d", 1);
 	ret = sys_write(fd, buf, strlen(buf));
-	if (ret <= 0)
+	if (ret <= 0) {
 		printk(">>>%s:%d\n", __func__, __LINE__);
+		return -1;
+	}
 
+	sys_close(fd);
 
 
 	//4. mkdir -p /sys/kernel/config/target/vhost/naa.600140554cf3a18e/tpgt_0/lun/lun_0
-	sprintf(buf, "/sys/kernel/config/target/vhost/naa.%llu", image->id);
+	sprintf(buf, "/sys/kernel/config/target/vhost/naa.%llu", id);
 	ret = sys_mkdir(buf, 0777);
 	if (ret)
 		printk(">>>%s:%d\n", __func__, __LINE__);
 
-	sprintf(buf, "/sys/kernel/config/target/vhost/naa.%llu/tpgt_0", image->id);
+	sprintf(buf, "/sys/kernel/config/target/vhost/naa.%llu/tpgt_0", id);
 	ret = sys_mkdir(buf, 0777);
 	if (ret)
 		printk(">>>%s:%d\n", __func__, __LINE__);
 
-	sprintf(buf, "/sys/kernel/config/target/vhost/naa.%llu/tpgt_0/lun/lun_0", image->id);
+	sprintf(buf, "/sys/kernel/config/target/vhost/naa.%llu/tpgt_0/lun/lun_0", id);
 	ret = sys_mkdir(buf, 0777);
 	if (ret)
 		printk(">>>%s:%d\n", __func__, __LINE__);
 
 
 	//5. ln -sf /sys/kernel/config/target/core/fileio_2/myFile2 /sys/kernel/config/target/vhost/naa.600140554cf3a18e/tpgt_0/lun/lun_0/123456
-	sprintf(buf, "/sys/kernel/config/target/core/fileio_%llu/myFile", image->id);
-	sprintf(buf_1, "/sys/kernel/config/target/vhost/naa.%llu/tpgt_0/lun/lun_0/12345", image->id);
+	sprintf(buf, "/sys/kernel/config/target/core/fileio_%llu/myFile", id);
+	sprintf(buf_1, "/sys/kernel/config/target/vhost/naa.%llu/tpgt_0/lun/lun_0/12345", id);
 	ret = sys_symlinkat(buf, AT_FDCWD, buf_1);
-	if (ret)
+	if (ret) {
 		printk(">>>%s:%d\n", __func__, __LINE__);
-
+		return -1;
+	}
 
 	//6. echo naa.600140554cf3a18e > /sys/kernel/config/target/vhost/naa.600140554cf3a18e/tpgt_0/nexus
-	sprintf(buf, "/sys/kernel/config/target/vhost/naa.%llu/tpgt_0/nexus", image->id);
+	sprintf(buf, "/sys/kernel/config/target/vhost/naa.%llu/tpgt_0/nexus", id);
 	if ((fd = sys_open((const char __user *)buf,
 			O_WRONLY, 0)) < 0) {
 		printk(">>>%s:%d\n", __func__, __LINE__);
-		return;
+		return -1;
 	}
 
-	sprintf(buf, "naa.%llu", image->id);
+	sprintf(buf, "naa.%llu", id);
 	ret = sys_write(fd, buf, strlen(buf));
-	if (ret <= 0)
+	if (ret <= 0) {
 		printk(">>>%s:%d\n", __func__, __LINE__);
+		return -1;
+	}
+
+	sys_close(fd);
 
 	//7. save image and link
+	image =
+		kzalloc(sizeof(struct hyper_gen_image), GFP_KERNEL);
+
+	image->id = id;
+	image->used = false;
+	image->file_path = file_path;
+
 	sprintf(image->naa_id, "naa.%llu", image->id);
 
+	INIT_LIST_HEAD(&image->list);
+
 	mutex_lock(&image_lock);
-	list_add(&image->image_list, &image_list);
+	list_add(&image->list, &image_list);
 	mutex_unlock(&image_lock);
-}
 
-static void init_vhost_target_file(void)
-{
-	int ret;
-
-	ret = sys_mount("sysfs", "/sys", "sysfs", MS_MGC_VAL, NULL);
-	if (ret)
-		printk(">>>%s:%d\n", __func__, __LINE__);
-
-	ret = sys_mount("configfs", "/sys/kernel/config", "configfs", MS_MGC_VAL, NULL);
-	if (ret)
-		printk(">>>%s:%d\n", __func__, __LINE__);
-
-	ret = sys_mkdir("/sys/kernel/config/target/vhost", 0777);
-	if (ret)
-		printk(">>>%s:%d\n", __func__, __LINE__);
-
-	alloc_vhost_target_file("fd_dev_name=/home/gen/openSource/guen/rootfs/debootstrap.ext2.raw,fd_dev_size=5116637696");
-
-	alloc_vhost_target_file("fd_dev_name=/home/gen/openSource/guen/rootfs/debootstrap_1.ext2.raw,fd_dev_size=5116637696");
+	return 0;
 }
 
 static void init_hyper_gen_bridge(void)
@@ -969,7 +1036,6 @@ static void init_hyper_gen_bridge(void)
 	//ip link set eth0 up. "ip=dhcp" has setup eth0 before.
 #if 0
 	dev = __dev_get_by_name(&init_net, "eth0");
-
 	if (dev) {
 		printk(">>>%s:%d up=%d\n", __func__, __LINE__, dev->flags & IFF_UP);
 	}
@@ -1040,10 +1106,8 @@ static void init_hyper_gen_bridge(void)
 		goto out;
 	}
 
-
 	//3. ip link set eth0 up, and promisc on
 	dev_change_flags(phy_eth, dev->flags | IFF_UP | IFF_PROMISC);
-
 
 	//4. ip link set eth0 master br0
 	ops = br->netdev_ops;
@@ -1054,7 +1118,6 @@ static void init_hyper_gen_bridge(void)
 		printk(">>>>>%s:%d\n",__func__, __LINE__);
 	}
 
-
 	//5. ip link set br0 up
 	dev_change_flags(br, dev->flags | IFF_UP);
 
@@ -1062,15 +1125,178 @@ out:
 	rtnl_unlock();
 }
 
+static int __init guest_image_dir_setup(char *addrs)
+{
+	guest_image_dir = memblock_virt_alloc(strlen(addrs) + 1, 0);	
+	if (!guest_image_dir) {
+		printk(">>>%s:%d\n", __func__, __LINE__);
+		return 1;
+	}
+
+	strcpy(guest_image_dir, addrs);
+
+	return 1;
+}
+__setup("guest_image=", guest_image_dir_setup);
+
+
+static int __init guest_kernel_dir_setup(char *addrs)
+{
+	guest_kernel_dir = memblock_virt_alloc(strlen(addrs) + 1, 0);	
+	if (!guest_kernel_dir) {
+		printk(">>>%s:%d\n", __func__, __LINE__);
+		return 1;
+	}
+
+	strcpy(guest_kernel_dir, addrs);
+
+	return 1;
+}
+__setup("guest_kernel=", guest_kernel_dir_setup);
+
+static void iter_each_dirent(char *dir_path, for_each_dirent_fn_t fn)
+{
+	int fd = -1;
+	char *buf;
+	struct linux_dirent *dirent;
+	struct stat tinfo;
+   	char *path;
+	int ret, len;
+
+	if ((fd = sys_open((const char __user *)dir_path,
+			O_RDONLY|O_NONBLOCK|O_CLOEXEC|O_DIRECTORY, 0)) < 0) {
+		printk(">>>%s:%d\n", __func__, __LINE__);
+		goto fail;
+	}
+
+	buf = kmalloc(1024, GFP_KERNEL);
+	if (!buf) {
+		printk(">>>%s:%d\n", __func__, __LINE__);
+		goto fail;
+	}
+
+	while (1) {
+		len = sys_getdents(fd, (struct linux_dirent __user *)buf, 1024);
+		if (len <= 0)
+			break;
+
+		dirent = (struct linux_dirent *)buf;
+
+		while (1) {
+			if (strcmp(dirent->d_name, ".") && strcmp(dirent->d_name, "..")) {
+				path = kmalloc(strlen(dir_path) + strlen(dirent->d_name) + 2, GFP_KERNEL);
+				sprintf(path, "%s/%s", dir_path, dirent->d_name);
+
+				if (0 > (ret = sys_newstat(path, (struct stat __user *)&tinfo))) {
+					printk(">>>%s:%d ret=%d path=%s\n", __func__, __LINE__, ret, path);
+					kfree(path);
+					goto out;
+				}
+
+				//setup vhost target file
+				if (S_ISREG(tinfo.st_mode))
+					fn(path, &tinfo);
+           	}
+out:
+			dirent = (void *)dirent + dirent->d_reclen;
+			if ((char *)dirent >= buf + len)
+				break;
+		}
+	}
+
+fail:
+	if (fd >= 0)
+		sys_close(fd);
+
+	kfree(buf);
+}
+
+static void guest_image_file_fn(char *path, struct stat *tinfo)
+{
+	int ret;
+	char *vhost_target_file_path;
+
+	vhost_target_file_path = kmalloc(strlen(path) + 45, GFP_KERNEL);
+	if (!vhost_target_file_path) {
+		kfree(path);
+		printk(">>>%s:%d\n", __func__, __LINE__);
+		return;
+	}
+
+	sprintf(vhost_target_file_path,
+		"fd_dev_name=%s,fd_dev_size=%lu", path, tinfo->st_size);
+
+	ret = alloc_vhost_target_file(vhost_target_file_path, path);
+	if (0 > ret)
+		kfree(path);
+
+	kfree(vhost_target_file_path);
+}
+
+static void parse_guest_image_dir(void)
+{
+	int ret;
+
+	if (!guest_image_dir)
+		return;
+
+	ret = sys_mount("sysfs", "/sys", "sysfs", MS_MGC_VAL, NULL);
+	if (ret) {
+		printk(">>>%s:%d\n", __func__, __LINE__);
+		return;
+	}
+
+	ret = sys_mount("configfs", "/sys/kernel/config", "configfs", MS_MGC_VAL, NULL);
+	if (ret) {
+		printk(">>>%s:%d\n", __func__, __LINE__);
+		return;
+	}
+
+	ret = sys_mkdir("/sys/kernel/config/target/vhost", 0777);
+	if (ret) {
+		printk(">>>%s:%d\n", __func__, __LINE__);
+		return;
+	}
+
+	iter_each_dirent(guest_image_dir, guest_image_file_fn);
+}
+
+static void guest_kernel_file_fn(char *path, struct stat *tinfo)
+{
+	struct hyper_gen_kernel *k;
+
+	k = kzalloc(sizeof(struct hyper_gen_kernel), GFP_KERNEL);
+
+	k->id = glb_kernel_cnt++;
+	k->file_path = path;
+
+	INIT_LIST_HEAD(&k->list);
+
+	mutex_lock(&kernel_lock);
+	list_add(&k->list, &kernel_list);
+	mutex_unlock(&kernel_lock);
+}
+
+static void parse_guest_kernel_dir(void)
+{
+	if (!guest_kernel_dir)
+		return;
+
+	iter_each_dirent(guest_kernel_dir, guest_kernel_file_fn);
+}
+
 void hyper_gen_init(void)
 {
 	int pid;
 
 	//setup hugepages
-	__nr_hugepages_store_common(0, &default_hstate, -1, 2048, 0);
+	__nr_hugepages_store_common(0, &default_hstate, -1, 1024, 0);
 
-	//setup vhost target file
-	init_vhost_target_file();
+	//parse guest image dir
+	parse_guest_image_dir();
+
+	//parse guest kernel dir
+	parse_guest_kernel_dir();
 
 	//setup bridge
 	init_hyper_gen_bridge();

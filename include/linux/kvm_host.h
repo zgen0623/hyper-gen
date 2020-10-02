@@ -523,8 +523,20 @@ struct hyper_gen_vm_work {
 struct hyper_gen_image {
 	uint64_t id;
 	char naa_id[64];
-	struct list_head image_list;
+	struct list_head list;
+	char *file_path;
 	bool used;
+};
+
+struct hyper_gen_kernel {
+	uint64_t id;
+	struct list_head list;
+	char *file_path;
+};
+
+struct vm_create_param {
+	uint64_t kernel_id;
+	uint64_t image_id;
 };
 
 
@@ -603,6 +615,7 @@ struct kvm {
 	struct hyper_gen_vm_work vm_destroy_work;
 
 	unsigned long image_id;
+	unsigned long kernel_id;
 
 #if 0
 	struct gen_shm *gen_shm;

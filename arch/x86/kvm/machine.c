@@ -46,6 +46,8 @@ void *my_vmalloc(unsigned long size);
 void my_vfree(const void *addr);
 kvm_pfn_t my_hva_to_pfn_memslot(unsigned long hva);
 
+uint64_t kernel_entry;
+
 static void set_gsi(struct kvm *kvm, unsigned int gsi)
 {
     set_bit(gsi, kvm->used_gsi_bitmap);
@@ -240,9 +242,9 @@ void init_env_possible_cpus(CPUX86State *env, struct kvm *kvm)
 	}
 }
 
-uint64_t kernel_entry;
+struct hyper_gen_kernel *find_kernel_by_id(unsigned long kernel_id);
 
-static void load_linux_mini(struct kvm *kvm)
+static int load_linux_mini(struct kvm *kvm)
 {
     int i;
 	void *buf = NULL;
@@ -250,12 +252,19 @@ static void load_linux_mini(struct kvm *kvm)
 	int rc;
     Elf64_Ehdr *ehdr;
 	Elf64_Phdr *phdrs;
+	struct hyper_gen_kernel *k;
 
-	rc = kernel_read_file_from_path(KERNEL_PATH, &buf, &size, 1024*1024*100,
+	k = find_kernel_by_id(kvm->kernel_id);
+	if (!k) {
+		printk(">>>%s:%d\n", __func__, __LINE__);
+		return -1;
+	}
+
+	rc = kernel_read_file_from_path(k->file_path, &buf, &size, 1024*1024*100,
 						READING_MODULE);
 	if (buf == NULL || rc || size == 0 || size < sizeof(ehdr)) {
 		printk(">>>>>fail to read file kernel file %s:%d\n", __func__, __LINE__);
-		return;
+		return -1;
 	}
 
 	ehdr = (Elf64_Ehdr *)buf;
@@ -265,22 +274,22 @@ static void load_linux_mini(struct kvm *kvm)
         || ehdr->e_ident[EI_MAG2] != ELFMAG2
         || ehdr->e_ident[EI_MAG3] != ELFMAG3) {
 		printk(">>>>>%s:%d\n", __func__, __LINE__);
-		return;
+		return -1;
     }
 
     if (ehdr->e_ident[EI_DATA] != ELFDATA2LSB) {
 		printk(">>>>>%s:%d\n", __func__, __LINE__);
-		return;
+		return -1;
     }
 
     if (ehdr->e_phentsize != sizeof(Elf64_Phdr)) {
 		printk(">>>>>%s:%d\n", __func__, __LINE__);
-		return;
+		return -1;
     }
 
     if (ehdr->e_phoff < sizeof(Elf64_Ehdr)) {
 		printk(">>>>>%s:%d\n", __func__, __LINE__);
-		return;
+		return -1;
     }
 
 	phdrs = (Elf64_Phdr *)(buf + ehdr->e_phoff);
@@ -298,7 +307,7 @@ static void load_linux_mini(struct kvm *kvm)
 
 		if (kvm_gfn_to_hva_cache_init(kvm, &ghc, phdr->p_paddr, phdr->p_filesz)) {
 			printk(">>>>>%s:%d\n", __func__, __LINE__);
-			return;
+			return -1;
 		}
 
     	memcpy((void*)ghc.hva, addr, phdr->p_filesz);
@@ -307,6 +316,8 @@ static void load_linux_mini(struct kvm *kvm)
     kernel_entry = ehdr->e_entry;
 
 	vfree(buf);
+
+	return 0;
 }
 
 #define KERNEL_CMDLINE_ADDR  0x20000
@@ -779,6 +790,8 @@ int create_hyper_gen_vcpu(struct kvm *kvm)
 
 	printk(">>>>%s:%d qemu_vm\n", __func__, __LINE__);
 	dump_current_cfs_rq_tg();
+
+	return 0;
 }
 
 int create_virt_machine(struct kvm *kvm)
@@ -862,19 +875,14 @@ int create_virt_machine(struct kvm *kvm)
 #endif
 
 	r = create_vmem(kvm);
-	if (r) {
-		kvm_free_pit(kvm);
-		kvm_ioapic_destroy(kvm);
-		kvm_pic_destroy(kvm);
-		vfree(kvm->possible_cpus);
-		kfree(kvm->irq_routes);
-		kfree(kvm->used_gsi_bitmap);
-
-		goto create_irqchip_unlock;
-	}
+	if (r)
+		goto fail;
 
 	//the following should be done after memory setup
-	load_linux_mini(kvm);
+	r = load_linux_mini(kvm);
+	if (r)
+		goto fail;
+
 	load_cmdline_mini(kvm);
 	build_mptable_mini(kvm);
 	build_bootparams_mini(kvm);
@@ -886,7 +894,15 @@ int create_virt_machine(struct kvm *kvm)
 	create_vserial(kvm);
 
 //	create_hyper_gen_vcpu(kvm);
+	goto create_irqchip_unlock;
 
+fail:
+	kvm_free_pit(kvm);
+	kvm_ioapic_destroy(kvm);
+	kvm_pic_destroy(kvm);
+	vfree(kvm->possible_cpus);
+	kfree(kvm->irq_routes);
+	kfree(kvm->used_gsi_bitmap);
 
 create_irqchip_unlock:
 	mutex_unlock(&kvm->lock);

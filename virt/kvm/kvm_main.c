@@ -635,7 +635,7 @@ void __weak kvm_arch_pre_destroy_vm(struct kvm *kvm)
 {
 }
 
-static struct kvm *kvm_create_vm(unsigned long type, unsigned long image_id)
+static struct kvm *kvm_create_vm(unsigned long type, struct vm_create_param *param)
 {
 	int r, i;
 	static uint64_t kvm_id;
@@ -645,7 +645,8 @@ static struct kvm *kvm_create_vm(unsigned long type, unsigned long image_id)
 		return NULL;
 
 	kvm->id = kvm_id++;
-	kvm->image_id = image_id;
+	kvm->image_id = param->image_id;
+	kvm->kernel_id = param->kernel_id;
 
 	spin_lock_init(&kvm->mmu_lock);
 //	mmgrab(current->mm);
@@ -3995,13 +3996,11 @@ static void hyper_gen_create_vm(struct hyper_gen_work *work)
 	struct hyper_gen_vm_work *vm_work =
 		container_of(work, struct hyper_gen_vm_work, work);
 	struct hyper_gen_image *img;
+	struct vm_create_param *param = work->opaque;
 
-	unsigned long image_id = (unsigned long)work->opaque;
-
-	kvm = kvm_create_vm(0, image_id);
+	kvm = kvm_create_vm(0, param);
 	if (!kvm) {
-		struct hyper_gen_image *img;
-		img = find_image_by_id(image_id);
+		img = find_image_by_id(param->image_id);
 		img->used = false;
 		printk(">>>%s:%d fail to create vm!!!\n", __func__,__LINE__);
 //		vm_work->ret = -1;
@@ -4042,19 +4041,24 @@ static void hyper_gen_create_vm(struct hyper_gen_work *work)
 out:
 //	atomic_set(&vm_work->done, 1);
 //	wake_up(&vm_work->wq);
-
+	kfree(param);
 	kfree(vm_work);
 }
 
-int hyper_gen_create_vm_from_mgnt(unsigned long image_id)
+int hyper_gen_create_vm_from_mgnt(unsigned long kernel_id, unsigned long image_id)
 {
 	int r = 0;
 	struct hyper_gen_vm_work *vm_work =
 		kzalloc(sizeof(struct hyper_gen_vm_work), GFP_KERNEL);
+	struct vm_create_param *param =
+			kzalloc(sizeof(struct vm_create_param), GFP_KERNEL);
+
+	param->kernel_id = kernel_id;
+	param->image_id = image_id;
 
 	vm_work->work.flags = 0;
 	vm_work->work.fn = hyper_gen_create_vm;
-	vm_work->work.opaque = (void*)image_id;
+	vm_work->work.opaque = (void*)param;
 //	vm_work->arg = (void *)(uint64_t)image_id;
 //	atomic_set(&vm_work->done, 0);
 //	init_waitqueue_head(&vm_work->wq);

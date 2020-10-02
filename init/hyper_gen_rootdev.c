@@ -1032,7 +1032,6 @@ static int _add_to_toplevel(struct dm_tree_node *node);
 static int _add_to_bottomlevel(struct dm_tree_node *node);
 static int _uuid_prefix_matches(const char *uuid, const char *uuid_prefix, size_t uuid_prefix_len);
 static void *dm_alloc(size_t length, bool zero);
-static void dm_free(void *ptr);
 
 
 static uint32_t _dm_device_major = 0;
@@ -1184,7 +1183,6 @@ static struct dev_types *create_dev_types(void)
 		goto fail;
 	}
 
-//	dts = kzalloc(sizeof(struct dev_types), GFP_KERNEL);
 	dts = dm_alloc(sizeof(struct dev_types), true);
 	if (!dts) {
 		printk(">>>%s:%d\n", __func__, __LINE__);
@@ -1193,8 +1191,6 @@ static struct dev_types *create_dev_types(void)
 
 	if ((fd = sys_open((const char __user *)"/proc/devices", O_RDONLY, 0)) < 0) {
 		printk(">>>%s:%d\n", __func__, __LINE__);
-//		kfree(dts);
-		dm_free(dts);
 		dts = NULL;
 		goto fail;
 	}
@@ -1307,6 +1303,7 @@ static void prepare_dev_list(struct list_head *dev_head)
 
 	buf = kmalloc(1024, GFP_KERNEL);
 	if (!buf) {
+		sys_close(fd);
 		printk(">>>%s:%d\n", __func__, __LINE__);
 		goto fail;
 	}
@@ -1325,7 +1322,6 @@ static void prepare_dev_list(struct list_head *dev_head)
 				struct __old_kernel_stat tinfo;
     			char *path;
 
-		//		path = kmalloc(4 + strlen(dirent->d_name) + 2, GFP_KERNEL);
 				path = dm_alloc(4 + strlen(dirent->d_name) + 2, false);
 				sprintf(path, "/dev/%s", dirent->d_name);
 
@@ -1333,8 +1329,6 @@ static void prepare_dev_list(struct list_head *dev_head)
 
 				if (sys_stat(path, (struct __old_kernel_stat __user *)&tinfo) < 0) {
 					printk(">>>%s:%d\n", __func__, __LINE__);
-		//			kfree(path);
-					dm_free(path);
 					goto out;
 				}
 
@@ -1347,7 +1341,6 @@ static void prepare_dev_list(struct list_head *dev_head)
 							found = 1;
 
 					if (!found) {
-			//			dev = kzalloc(sizeof(struct hyper_rootdev_device), GFP_KERNEL);
 						dev = dm_alloc(sizeof(struct hyper_rootdev_device), true);
 						dev->dev = tinfo.st_rdev;
 						dev->path = path;
@@ -2042,18 +2035,13 @@ static struct lvmcache_info *lvmcache_add(struct dev_types *dt, const char *pvid
     strncpy(pvid_s, pvid, sizeof(pvid_s) - 1);
     pvid_s[sizeof(pvid_s) - 1] = '\0';
 
-//	if (!(label = kzalloc(sizeof(struct label), GFP_KERNEL)))
 	if (!(label = dm_alloc(sizeof(struct label), true)))
         return NULL;
 
 	strncpy(label->type, LVM2_LABEL, sizeof(label->type));
 
-//	if (!(info = kzalloc(sizeof(struct lvmcache_info), GFP_KERNEL))) {
-	if (!(info = dm_alloc(sizeof(struct lvmcache_info), true))) {
-       // kfree(label);
-        dm_free(label);
+	if (!(info = dm_alloc(sizeof(struct lvmcache_info), true)))
         return NULL;
-    }
 
     label->info = info;
     info->label = label;
@@ -2066,13 +2054,8 @@ static struct lvmcache_info *lvmcache_add(struct dev_types *dt, const char *pvid
 
     info->status |= CACHE_INVALID;
 
-    if (!lvmcache_update_pvid(info, pvid_s)) {
-     //   kfree(info);
-		dm_free(info);
-      //  kfree(label);
-		dm_free(label);
+    if (!lvmcache_update_pvid(info, pvid_s))
         return NULL;
-    }
 
     return info;
 }
@@ -3367,15 +3350,11 @@ static int update_mda(struct metadata_area *mda, void *baton)
 	unsigned mda_ignored;
     unsigned old_mda_ignored;
 
-//	if (!(mdah = kmalloc(MDA_HEADER_SIZE, GFP_KERNEL)))
 	if (!(mdah = dm_alloc(MDA_HEADER_SIZE, false)))
 		goto out;
 
-    if (!raw_read_mda_header(mdah, &mdac->area)) {
-//		kfree(mdah);
-		dm_free(mdah);
+    if (!raw_read_mda_header(mdah, &mdac->area))
 		goto out;
-    }
 
 	mda_ignored = (mdah->raw_locns[0].flags & RAW_LOCN_IGNORED ? 1 : 0);
     old_mda_ignored = (mda->status & MDA_IGNORED);
@@ -3446,16 +3425,11 @@ static int lvm2_label_read(struct dev_types *dt, struct hyper_rootdev_device *de
 		struct metadata_area *mdal;
 		struct mda_context *mdac;
 
-		//if (!(mdal = kmalloc(sizeof(struct metadata_area), GFP_KERNEL)))
 		if (!(mdal = dm_alloc(sizeof(struct metadata_area), false)))
             goto local_fail;
         
-	//	if (!(mdac = kmalloc(sizeof(struct mda_context), GFP_KERNEL))) {
-		if (!(mdac = dm_alloc(sizeof(struct mda_context), false))) {
-         //   kfree(mdal);
-            dm_free(mdal);
+		if (!(mdac = dm_alloc(sizeof(struct mda_context), false)))
             goto local_fail;
-        }
 
 		mdal->metadata_locn = mdac;
 		mdal->status = 0;
@@ -3522,18 +3496,14 @@ static int fid_add_mdas(struct format_instance *fid, struct list_head *mdas,
 	struct mda_context *new_mdac;
     
 	list_for_each_entry(mda, mdas, list) {
-	//	if (!(new_mdal = kmalloc(sizeof(struct metadata_area), GFP_KERNEL)))
 		if (!(new_mdal = dm_alloc(sizeof(struct metadata_area), false)))
             continue;
 
     	memcpy(new_mdal, mda, sizeof(*mda));
         
-//		if (!(new_mdac = kmalloc(sizeof(struct mda_context), GFP_KERNEL))) {
-		if (!(new_mdac = dm_alloc(sizeof(struct mda_context), false))) {
-          //  kfree(new_mdal);
-            dm_free(new_mdal);
+		if (!(new_mdac = dm_alloc(sizeof(struct mda_context), false)))
             continue;
-        }
+
 		memcpy(new_mdac, mda->metadata_locn, sizeof(*new_mdac));
 
 		new_mdal->metadata_locn = new_mdac;
@@ -3866,15 +3836,11 @@ static int _read_pv(struct format_instance *fid,
 	int found = 0;
     int outdated = !strcmp(pvn->parent->key, "outdated_pvs");
 
-//    if (!(pvl = kzalloc(sizeof(*pvl), GFP_KERNEL)) ||
     if (!(pvl = dm_alloc(sizeof(*pvl), true)))
 		return 0;
 
-  //  if (!(pvl->pv = kzalloc(sizeof(*pvl->pv), GFP_KERNEL)))
-    if (!(pvl->pv = dm_alloc(sizeof(*pvl->pv), true))) {
-		dm_free(pvl);
+    if (!(pvl->pv = dm_alloc(sizeof(*pvl->pv), true)))
         return 0;
-	}
 
     pv = pvl->pv;
 
@@ -4316,16 +4282,11 @@ static struct lv_segment *alloc_lv_segment(
     struct lv_segment *seg;
     uint32_t areas_sz = area_count * sizeof(*seg->areas);
 
-//    if (!(seg = kzalloc(sizeof(*seg), GFP_KERNEL)))
     if (!(seg = dm_alloc(sizeof(*seg), true)))
         return NULL;
 
- //   if (!(seg->areas = kzalloc(areas_sz, GFP_KERNEL))) {
-    if (!(seg->areas = dm_alloc(areas_sz, GFP_KERNEL))) {
-//		kfree(seg);
-		dm_free(seg);
+    if (!(seg->areas = dm_alloc(areas_sz, GFP_KERNEL)))
         return NULL;
-    }
 
     seg->segtype = segtype;
     seg->lv = lv;
@@ -7197,20 +7158,6 @@ static void *dm_alloc(size_t length, bool zero)
 
 out:
 	return ptr;
-}
-
-static void dm_free(void *ptr)
-{
-	int i;
-	void *tmp;
-
-	for (i = 0; i < dm_alloc_array_cnt; i++) {
-		tmp = dm_alloc_array[i];
-		if (ptr == tmp) {
-			kfree(tmp);
-			dm_alloc_array[i] = NULL;
-		}
-	}
 }
 
 static void free_dm_memory(void)
