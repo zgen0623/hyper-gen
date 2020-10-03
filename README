@@ -1,18 +1,103 @@
-Linux kernel
-============
+Introduce
+==========
 
-This file was moved to Documentation/admin-guide/README.rst
+Hyper-gen is a new generation hypervisor with high-efficient architecture design and small codesize.
+Based on qemu-kvm and linux kernel, by reshuffling the architecture and leaving only most useful code, hyper-gen is purpose to support the three kinds of VM instance as below:
+a. lightweight VM
+   exclude emulation of firmware and unnecessary devices.
+b. baremetal VM
+   with lapic passthrough and other VT optimizations, reduce VM-EXITs to minimal.
+c. normal VM
+   support all the virtualization features such as firmware, vgpu, migration, hotplug to run any kind of guestOS.
 
-Please notice that there are several guides for kernel developers and users.
-These guides can be rendered in a number of formats, like HTML and PDF.
+For now, hyper-gen only supports lightweight VM instance and Intel IA CPUs.
+The following is the main architecture of hyper-gen.
 
-In order to build the documentation, use ``make htmldocs`` or
-``make pdfdocs``.
 
-There are various text files in the Documentation/ subdirectory,
-several of them using the Restructured Text markup notation.
-See Documentation/00-INDEX for a list of what is contained in each file.
+|---------------------------------------|
+|non-root  |                            |
+|----------                             |
+|                                       |
+|      VM0  VM1  VM2  ...  VMn          |
+|                                       |
+|---------------------------------------|
+|root&ring0 |                           |
+|-----------                            |
+|      a. reshuffled tiny-kernel        |
+|      b. qemu-mini                     |
+|      c. customized KVM module         |
+|      d. hyper-gen shell               |
+|---------------------------------------|
+|         Hardware                      |
+|---------------------------------------|
 
-Please read the Documentation/process/changes.rst file, as it contains the
-requirements for building and running the kernel, and information about
-the problems which may result by upgrading your kernel.
+
+
+
+Getting Started
+================
+
+1. Before all, you should have a linux host such as ubuntu, centos or any other linux distribution.
+
+2. Building hyper-gen is the same as kernel, except the config file as follows:
+     git clone  https://github.com/zgen0623/hyper-gen.git
+     cd hyper-gen
+     mkdir out
+     cp config_tiny_kernel out/.config
+     make bzImage O=./out
+
+3. Install hyper-gen as follows:
+     copy bzImage file to /boot/ directory
+     edit the menuentry in /boot/grub/grub.cfg and replace the kernel image with the new bzImage as below
+        linux   /boot/vmlinuz-5.4.0-48-generic root=/dev/mapper/ubuntu--vg-root
+          to
+        linux   /boot/bzImage root=/dev/mapper/ubuntu--vg-root
+
+4. Create a directory for saving decompressed kernel images(vmlinux) and update the kernel cmdline as follows:
+     mkdir /path/to/guest_kernel
+     edit the menuentry in /boot/grub/grub.cfg as below
+        linux   /boot/bzImage root=/dev/mapper/ubuntu--vg-root guest_kernel=/path/to/guest_kernel
+
+5. Prepare a normal kernel codebase, build a decompressed kernel image file vmlinux and save it in /path/to/guest_kernel.
+
+6. Create a directory for saving raw format qemu rootfs images and update the kernel cmdline as follows:
+     mkdir /path/to/guest_image
+     edit the menuentry in /boot/grub/grub.cfg as below
+        linux   /boot/bzImage root=/dev/mapper/ubuntu--vg-root guest_kernel=/path/to/guest_kernel guest_image=/path/to/guest_image
+
+7. Make a raw format rootfs image, and save it in /path/to/guest_image
+
+8. Reboot and select the menuentry for hyper-gen in grub bootmenu 
+
+9. Press ALT+F3 into hyper-gen shell
+
+10. Shell commands for hyper-gen
+   image_list: list all the rootfs images
+   kernel_list: list all the kernel images
+   vm_list: list all the running VMs
+   vm_create <kernel id> <image id>: create a VM
+   vm_destroy <vm id>:  detroy a VM
+   vm_console <vm id>:  attach to a VM console    // press CTRL+d to deattach
+
+
+
+
+Planned features
+================
+Host:
+    reshuffle kernel mm to apply hugepage
+    dynamic lapic passthrough
+
+Virtualization:
+    pt dev
+    9p
+    uefi virtualization
+    vgpu
+    migration
+    hotplug
+
+Management:
+    manager VM
+    hyper-gen proxy module in manager VM
+    libvirt for hyper-gen
+
