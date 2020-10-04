@@ -37,7 +37,7 @@ The following is the main architecture of hyper-gen.
 Getting Started
 ================
 
-1. Before all, you should have a linux host such as ubuntu, centos or any other linux distribution.
+1. First of all, you should have a linux host such as ubuntu, centos or any other linux distribution.
 
 2. Building hyper-gen is the same as kernel, except the config file as follows:
      git clone  https://github.com/zgen0623/hyper-gen.git
